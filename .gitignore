@@ -1,11 +1,11 @@
-# ---------- Dependencies ----------
+# Dependencies
 node_modules/
 pnpm-lock.yaml
 npm-debug.log*
 yarn.lock
 package-lock.json
 
-# ---------- Builds / Artifacts / Caches ----------
+# Builds / Artifacts / Caches
 dist/
 out/
 .build/
@@ -18,26 +18,24 @@ coverage/
 **/publish/
 *.log
 
-# ---------- OS / Editor ----------
+# OS / Editor
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
 *.swp
 
-# ---------- Env & Secrets ----------
+# Env & Secrets
 .env
 .env.*
 !.env.example
 
-# ---------- Bundles / Archives ----------
+# Bundles / Archives
 *.zip
 *.7z
 *.tar
 *.tar.gz
 *.tgz
 
-# ---------- Misc ----------
+# Misc
 *.local
-*.tgz
-*.exe
