@@ -1,0 +1,10 @@
+// app.module.ts — add these imports and include in @Module.imports
+import { DevicesModule } from "./devices/devices.module";
+import { HealthModule } from "./health/health.module";
+
+// ...
+
+@Module({
+  imports: [ /* existing modules */ , DevicesModule, HealthModule ],
+})
+export class AppModule {}

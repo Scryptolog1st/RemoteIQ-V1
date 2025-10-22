@@ -1,0 +1,2799 @@
+
+########## BEGIN FILE: .env.example ##########
+NODE_ENV=development
+PORT=3001
+DATABASE_URL="file:./dev.db"
+ENROLLMENT_SECRET="replace-me"
+ADMIN_API_KEY="replace-me"
+JWT_SECRET="replace-me"
+########## END FILE:   .env.example ##########
+
+########## BEGIN FILE: migrations\001_users_passwords.sql ##########
+-- Adds password fields to users for admin-created users & manual resets
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+ALTER TABLE
+    users
+ADD
+    COLUMN IF NOT EXISTS password_hash text,
+ADD
+    COLUMN IF NOT EXISTS password_updated_at timestamptz;
+
+-- (Optional) if you want invited users to be default 'invited' not 'active'
+ALTER TABLE
+    users
+ALTER COLUMN
+    status
+SET
+    DEFAULT 'active';
+########## END FILE:   migrations\001_users_passwords.sql ##########
+
+########## BEGIN FILE: migrations\20251019_keep_current_model.sql ##########
+/*
+ KEEP CURRENT MODEL (users.role is TEXT)
+ 
+ This migration:
+ - Ensures pgcrypto is available (for gen_random_uuid if you ever need it)
+ - Enhances roles table (description, permissions text[], updated_at)
+ - Adds case-insensitive unique index on roles.name
+ - Adds a generic "updated_at" trigger and enables it for tables that already have an updated_at column
+ (roles, users, support_legal_settings, branding_settings)
+ - Adds a helpful index on lower(users.role) for faster role counts
+ - Seeds Owner/Admin/User roles if missing (safe, idempotent)
+ - Creates roles_with_counts view (used by API to return usersCount)
+ */
+-- 0) Extension (safe / idempotent)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- 1) ROLES: add columns if missing
+DO $ $ BEGIN IF NOT EXISTS (
+    SELECT
+        1
+    FROM
+        information_schema.columns
+    WHERE
+        table_schema = 'public'
+        AND table_name = 'roles'
+        AND column_name = 'description'
+) THEN
+ALTER TABLE
+    public.roles
+ADD
+    COLUMN description text;
+
+END IF;
+
+IF NOT EXISTS (
+    SELECT
+        1
+    FROM
+        information_schema.columns
+    WHERE
+        table_schema = 'public'
+        AND table_name = 'roles'
+        AND column_name = 'permissions'
+) THEN
+ALTER TABLE
+    public.roles
+ADD
+    COLUMN permissions text [] NOT NULL DEFAULT ARRAY [] :: text [];
+
+END IF;
+
+IF NOT EXISTS (
+    SELECT
+        1
+    FROM
+        information_schema.columns
+    WHERE
+        table_schema = 'public'
+        AND table_name = 'roles'
+        AND column_name = 'updated_at'
+) THEN
+ALTER TABLE
+    public.roles
+ADD
+    COLUMN updated_at timestamptz NOT NULL DEFAULT now();
+
+END IF;
+
+END $ $;
+
+-- 2) ROLES: case-insensitive uniqueness on name (keeps your existing unique on name too)
+CREATE UNIQUE INDEX IF NOT EXISTS roles_name_lower_key ON public.roles (lower(name));
+
+-- 3) Generic updated_at trigger function (reused by several tables)
+DO $ $ BEGIN IF NOT EXISTS (
+    SELECT
+        1
+    FROM
+        pg_proc
+    WHERE
+        proname = 'set_updated_at_now'
+) THEN CREATE
+OR REPLACE FUNCTION public.set_updated_at_now() RETURNS trigger LANGUAGE plpgsql AS $ fn $ BEGIN NEW.updated_at := now();
+
+RETURN NEW;
+
+END;
+
+$ fn $;
+
+END IF;
+
+END $ $;
+
+-- 4) Attach updated_at triggers for tables that already have updated_at
+--    (safe: checks existence before creating)
+DO $ $ BEGIN -- roles
+IF EXISTS (
+    SELECT
+        1
+    FROM
+        information_schema.columns
+    WHERE
+        table_schema = 'public'
+        AND table_name = 'roles'
+        AND column_name = 'updated_at'
+)
+AND NOT EXISTS (
+    SELECT
+        1
+    FROM
+        pg_trigger
+    WHERE
+        tgname = 'trg_roles_set_updated_at'
+) THEN CREATE TRIGGER trg_roles_set_updated_at BEFORE
+UPDATE
+    ON public.roles FOR EACH ROW EXECUTE FUNCTION public.set_updated_at_now();
+
+END IF;
+
+-- users
+IF EXISTS (
+    SELECT
+        1
+    FROM
+        information_schema.columns
+    WHERE
+        table_schema = 'public'
+        AND table_name = 'users'
+        AND column_name = 'updated_at'
+)
+AND NOT EXISTS (
+    SELECT
+        1
+    FROM
+        pg_trigger
+    WHERE
+        tgname = 'trg_users_set_updated_at'
+) THEN CREATE TRIGGER trg_users_set_updated_at BEFORE
+UPDATE
+    ON public.users FOR EACH ROW EXECUTE FUNCTION public.set_updated_at_now();
+
+END IF;
+
+-- support_legal_settings
+IF EXISTS (
+    SELECT
+        1
+    FROM
+        information_schema.columns
+    WHERE
+        table_schema = 'public'
+        AND table_name = 'support_legal_settings'
+        AND column_name = 'updated_at'
+)
+AND NOT EXISTS (
+    SELECT
+        1
+    FROM
+        pg_trigger
+    WHERE
+        tgname = 'trg_support_legal_settings_set_updated_at'
+) THEN CREATE TRIGGER trg_support_legal_settings_set_updated_at BEFORE
+UPDATE
+    ON public.support_legal_settings FOR EACH ROW EXECUTE FUNCTION public.set_updated_at_now();
+
+END IF;
+
+-- branding_settings
+IF EXISTS (
+    SELECT
+        1
+    FROM
+        information_schema.columns
+    WHERE
+        table_schema = 'public'
+        AND table_name = 'branding_settings'
+        AND column_name = 'updated_at'
+)
+AND NOT EXISTS (
+    SELECT
+        1
+    FROM
+        pg_trigger
+    WHERE
+        tgname = 'trg_branding_settings_set_updated_at'
+) THEN CREATE TRIGGER trg_branding_settings_set_updated_at BEFORE
+UPDATE
+    ON public.branding_settings FOR EACH ROW EXECUTE FUNCTION public.set_updated_at_now();
+
+END IF;
+
+END $ $;
+
+-- 5) Helpful performance index for role counts
+CREATE INDEX IF NOT EXISTS idx_users_lower_role ON public.users (lower(role));
+
+-- 6) Seed common roles if missing (safe/idempotent; keeps your current model)
+INSERT INTO
+    public.roles (name, description, permissions)
+SELECT
+    r.name,
+    r.description,
+    r.permissions
+FROM
+    (
+        VALUES
+            (
+                'Owner',
+                'System owner',
+                ARRAY [
+    'users.read','users.write','users.delete','users.2fa.reset',
+    'roles.read','roles.write','roles.delete',
+    'teams.read','teams.write','teams.delete',
+    'billing.read','billing.write',
+    'settings.read','settings.write'
+  ] :: text []
+            ),
+            (
+                'Admin',
+                'Administrator',
+                ARRAY [
+    'users.read','users.write','users.2fa.reset',
+    'roles.read','roles.write',
+    'teams.read','teams.write',
+    'billing.read',
+    'settings.read','settings.write'
+  ] :: text []
+            ),
+            (
+                'User',
+                'Standard user',
+                ARRAY [
+    'users.read','roles.read','teams.read','billing.read','settings.read'
+  ] :: text []
+            )
+    ) AS r(name, description, permissions)
+WHERE
+    NOT EXISTS (
+        SELECT
+            1
+        FROM
+            public.roles x
+        WHERE
+            lower(x.name) = lower(r.name)
+    );
+
+-- 7) View that your API can read directly to provide usersCount in one call
+CREATE
+OR REPLACE VIEW public.roles_with_counts AS
+SELECT
+    ro.id,
+    ro.name,
+    ro.description,
+    ro.permissions,
+    ro.created_at,
+    ro.updated_at,
+    COALESCE(u.cnt, 0) :: int AS users_count
+FROM
+    public.roles ro
+    LEFT JOIN LATERAL (
+        SELECT
+            COUNT(*) AS cnt
+        FROM
+            public.users u
+        WHERE
+            lower(u.role) = lower(ro.name)
+    ) u ON TRUE;
+########## END FILE:   migrations\20251019_keep_current_model.sql ##########
+
+########## BEGIN FILE: migrations\20251019_roles_companion_meta.sql ##########
+-- ======================================================================
+-- roles companion metadata (non-breaking, keeps your current model)
+--   - Adds role_meta table keyed to roles.name
+--   - Stores description, permissions (text[]), updated_at
+--   - Adds trigger to auto-bump updated_at on UPDATE
+--   - Creates a convenience VIEW for listing with users_count
+-- ======================================================================
+
+BEGIN;
+
+-- 1) role_meta table (companion to roles)
+CREATE TABLE IF NOT EXISTS public.role_meta (
+  role_name   text PRIMARY KEY,
+  description text,
+  permissions text[] NOT NULL DEFAULT '{}'::text[],
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT fk_role_meta_role
+    FOREIGN KEY (role_name)
+    REFERENCES public.roles(name)
+    ON DELETE CASCADE
+);
+
+-- 2) Update timestamp trigger for role_meta
+CREATE OR REPLACE FUNCTION public.role_meta_touch_updated_at()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_role_meta_touch_updated_at ON public.role_meta;
+CREATE TRIGGER trg_role_meta_touch_updated_at
+BEFORE UPDATE ON public.role_meta
+FOR EACH ROW
+EXECUTE FUNCTION public.role_meta_touch_updated_at();
+
+-- 3) Helpful index for case-insensitive joins/lookups (optional but handy)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM   pg_indexes
+    WHERE  schemaname = 'public'
+      AND  indexname  = 'idx_role_meta_lower_name'
+  ) THEN
+    EXECUTE 'CREATE INDEX idx_role_meta_lower_name
+             ON public.role_meta (lower(role_name))';
+  END IF;
+END;
+$$;
+
+-- 4) View that your API can SELECT from to satisfy the RolesTab shape
+--    - users_count derived from users.role (TEXT) against role name
+--    - updated_at prefers meta.updated_at else roles.created_at
+CREATE OR REPLACE VIEW public.roles_with_meta AS
+SELECT
+  r.id,
+  r.name,
+  COALESCE(rm.description, '')           AS description,
+  COALESCE(rm.permissions, '{}')         AS permissions,
+  COALESCE(rm.updated_at, r.created_at)  AS updated_at,
+  r.created_at,
+  (
+    SELECT COUNT(*)::int
+    FROM public.users u
+    WHERE lower(u.role) = lower(r.name)
+  ) AS users_count
+FROM public.roles r
+LEFT JOIN public.role_meta rm
+  ON rm.role_name = r.name;
+
+-- 5) Seed role_meta rows for existing roles (no-op if already present)
+INSERT INTO public.role_meta (role_name, description, permissions)
+SELECT r.name,
+       CASE lower(r.name)
+         WHEN 'owner' THEN 'Full system access'
+         WHEN 'admin' THEN 'Administrative access'
+         ELSE 'Standard access'
+       END,
+       CASE lower(r.name)
+         WHEN 'owner' THEN ARRAY[
+           'users.read','users.write','users.delete','users.2fa.reset',
+           'roles.read','roles.write','roles.delete',
+           'teams.read','teams.write','teams.delete',
+           'billing.read','billing.write',
+           'settings.read','settings.write'
+         ]::text[]
+         WHEN 'admin' THEN ARRAY[
+           'users.read','users.write','users.2fa.reset',
+           'roles.read','roles.write',
+           'teams.read','teams.write',
+           'billing.read',
+           'settings.read','settings.write'
+         ]::text[]
+         ELSE ARRAY['users.read','roles.read','teams.read','settings.read']::text[]
+       END
+FROM public.roles r
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.role_meta rm WHERE rm.role_name = r.name
+);
+
+COMMIT;
+
+########## END FILE:   migrations\20251019_roles_companion_meta.sql ##########
+
+########## BEGIN FILE: migrations\XXXX_add_users_roles.sql ##########
+-- migrations/XXXX_add_users_roles.sql
+-- Users & Roles schema (idempotent)
+-- Needed for gen_random_uuid() in some Postgres setups
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- -----------------------------
+-- roles
+-- -----------------------------
+CREATE TABLE IF NOT EXISTS roles (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name text UNIQUE NOT NULL,
+    description text
+);
+
+-- Seed common roles (no duplicates)
+INSERT INTO
+    roles (name, description)
+VALUES
+    (
+        'Owner',
+        'Full access to all organization settings and data'
+    ),
+    (
+        'Admin',
+        'Manage users, settings, billing; full device access'
+    ),
+    ('User', 'Standard access') ON CONFLICT (name) DO NOTHING;
+
+-- -----------------------------
+-- users
+-- -----------------------------
+CREATE TABLE IF NOT EXISTS users (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name text NOT NULL,
+    email text UNIQUE NOT NULL,
+    role text NOT NULL DEFAULT 'User',
+    status text NOT NULL DEFAULT 'active',
+    -- 'active' | 'suspended'
+    two_factor_enabled boolean NOT NULL DEFAULT false,
+    last_seen timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Useful indexes
+CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
+
+CREATE INDEX IF NOT EXISTS idx_users_role ON users (role);
+
+CREATE INDEX IF NOT EXISTS idx_users_status ON users (status);
+
+-- -----------------------------
+-- updated_at trigger
+-- -----------------------------
+CREATE
+OR REPLACE FUNCTION set_users_updated_at() RETURNS trigger LANGUAGE plpgsql AS $ func $ BEGIN NEW.updated_at := now();
+
+RETURN NEW;
+
+END $ func $;
+
+DROP TRIGGER IF EXISTS trg_users_updated_at ON users;
+
+CREATE TRIGGER trg_users_updated_at BEFORE
+UPDATE
+    ON users FOR EACH ROW EXECUTE FUNCTION set_users_updated_at();
+
+-- -----------------------------
+-- Optional: seed a demo user if you want (email must be unique).
+-- Comment out if you don't want any seed user here.
+-- -----------------------------
+INSERT INTO
+    users (name, email, role, status, two_factor_enabled)
+SELECT
+    'Demo User',
+    'demo@example.com',
+    'User',
+    'active',
+    false
+WHERE
+    NOT EXISTS (
+        SELECT
+            1
+        FROM
+            users
+        WHERE
+            email = 'demo@example.com'
+    );
+########## END FILE:   migrations\XXXX_add_users_roles.sql ##########
+
+########## BEGIN FILE: migrations\XXXX_users_harden_ids.sql ##########
+-- Ensure pgcrypto (for gen_random_uuid) is available
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Normalize id to uuid (handle empty-string -> NULL), then set default
+ALTER TABLE
+    users
+ALTER COLUMN
+    id
+SET
+    DATA TYPE uuid USING NULLIF(id :: text, '') :: uuid;
+
+ALTER TABLE
+    users
+ALTER COLUMN
+    id
+SET
+    DEFAULT gen_random_uuid();
+
+-- Add PRIMARY KEY on id if it doesn't already exist (no $$, no backslashes)
+DO LANGUAGE plpgsql '
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM   pg_constraint
+    WHERE  conrelid = ''public.users''::regclass
+    AND    contype  = ''p''
+  ) THEN
+    EXECUTE ''ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id)'';
+  END IF;
+END';
+
+-- Add UNIQUE(email) if it doesn't already exist (no $$, no backslashes)
+DO LANGUAGE plpgsql '
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM   pg_constraint
+    WHERE  conrelid = ''public.users''::regclass
+    AND    contype  = ''u''
+    AND    conname  = ''users_email_key''
+  ) THEN
+    EXECUTE ''ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email)'';
+  END IF;
+END';
+
+-- Backfill any NULL ids (should be rare after the USING cast)
+UPDATE
+    users
+SET
+    id = gen_random_uuid()
+WHERE
+    id IS NULL;
+########## END FILE:   migrations\XXXX_users_harden_ids.sql ##########
+
+########## BEGIN FILE: src\app.module.ts ##########
+import { Module, MiddlewareConsumer, NestModule } from "@nestjs/common";
+import { ServeStaticModule } from "@nestjs/serve-static";
+import { join } from "path";
+
+import { CommonModule } from "./common/common.module";
+import { AuthModule } from "./auth/auth.module";
+import { WsModule } from "./ws/ws.module";
+import { AgentsModule } from "./agents/agents.module";
+import { JobsModule } from "./jobs/jobs.module";
+import { DevicesModule } from "./devices/devices.module";
+import { HealthModule } from "./health/health.module";
+import { AdminModule } from "./admin/admin.module";
+import { CompanyModule } from "./company/company.module";
+import { BrandingModule } from "./branding/branding.module";
+import { LocalizationModule } from "./localization/localization.module";
+import { SupportModule } from "./support/support.module";
+import { SupportLegalModule } from "./support-legal/support-legal.module";
+import { UsersModule } from "./users/users.module";
+import { RolesModule } from "./roles/roles.module";
+import { SmtpModule } from "./smtp/smtp.module";
+import { ScheduleModule } from "@nestjs/schedule";
+import { ImapModule } from "./imap/imap.module";
+
+import { JwtModule } from "@nestjs/jwt"; // <-- IMPORTANT: make JwtService available in AppModule context
+import { AuthCookieMiddleware } from "./common/auth-cookie.middleware";
+
+@Module({
+    imports: [
+        // Static files mounted at /static -> maps to /public
+        ServeStaticModule.forRoot({
+            rootPath: join(__dirname, "..", "public"),
+            serveRoot: "/static",
+        }),
+
+        // Make JwtService available to middleware applied in this module
+        JwtModule.register({
+            secret: process.env.JWT_SECRET ?? "dev-secret",
+            // signOptions not needed here; middleware only verifies
+        }),
+
+        // Base/shared
+        CommonModule,
+
+        // Feature modules
+        BrandingModule,
+        AuthModule,
+        WsModule,
+        AgentsModule,
+        JobsModule,
+        DevicesModule,
+        HealthModule,
+        AdminModule,
+        CompanyModule,
+        LocalizationModule,
+        SupportModule,
+        SupportLegalModule,
+        UsersModule,
+        RolesModule,
+
+        // SMTP + IMAP
+        SmtpModule,
+        ScheduleModule.forRoot(),
+        ImapModule,
+    ],
+})
+export class AppModule implements NestModule {
+    configure(consumer: MiddlewareConsumer) {
+        // Apply cookie->req.user middleware to everything except obvious public/static routes
+        consumer
+            .apply(AuthCookieMiddleware)
+            .exclude(
+                "healthz",
+                "docs",
+                "docs/(.*)",
+                "static/(.*)",       // static files
+                "api/auth/login",    // login doesn’t need req.user
+                "api/auth/logout"    // logout doesn’t need req.user
+            )
+            .forRoutes("*");
+    }
+}
+
+########## END FILE:   src\app.module.ts ##########
+
+########## BEGIN FILE: src\auth\auth-cookie.guard.ts ##########
+// src/auth/auth-cookie.guard.ts
+import {
+    CanActivate,
+    ExecutionContext,
+    Injectable,
+    UnauthorizedException,
+} from "@nestjs/common";
+import type { Request, Response } from "express";
+import { JwtService } from "@nestjs/jwt";
+import { PgPoolService } from "../storage/pg-pool.service";
+import { randomUUID } from "crypto";
+
+function parseCookieMaxAge(): number {
+    const v = process.env.AUTH_COOKIE_MAX_AGE_MS;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : 7 * 24 * 60 * 60 * 1000; // 7d
+}
+
+@Injectable()
+export class AuthCookieGuard implements CanActivate {
+    constructor(
+        private readonly jwt: JwtService,
+        private readonly pg: PgPoolService,
+    ) { }
+
+    async canActivate(context: ExecutionContext): Promise<boolean> {
+        const req = context.switchToHttp().getRequest<Request>();
+        const res = context.switchToHttp().getResponse<Response>();
+
+        const cookieName = process.env.AUTH_COOKIE_NAME || "auth_token";
+        const tokenFromCookie =
+            (req as any).cookies?.[cookieName] ||
+            (req as any).cookies?.["auth_token"];
+        const tokenFromHeader =
+            req.headers.authorization?.replace(/^Bearer\s+/i, "") || null;
+
+        const token = tokenFromCookie || tokenFromHeader;
+        if (!token) throw new UnauthorizedException("No auth token provided");
+
+        let payload: any;
+        try {
+            payload = await this.jwt.verifyAsync(token);
+        } catch {
+            throw new UnauthorizedException("Invalid token");
+        }
+        if (!payload?.sub) throw new UnauthorizedException("Invalid token payload");
+
+        (req as any).user = {
+            id: String(payload.sub),
+            email: payload.email,
+            name: payload.name,
+            role: payload.role,
+        };
+
+        // Legacy token migration: mint a new token with jti and set cookie
+        let jti: string | null = payload?.jti != null ? String(payload.jti) : null;
+        if (!jti) {
+            jti = randomUUID();
+            const newToken = await this.jwt.signAsync({
+                sub: payload.sub,
+                email: payload.email,
+                name: payload.name,
+                role: payload.role,
+                jti,
+            });
+
+            res.cookie(cookieName, newToken, {
+                httpOnly: true,
+                sameSite: "lax",
+                secure: process.env.NODE_ENV === "production",
+                path: "/",
+                maxAge: parseCookieMaxAge(),
+            });
+
+            const ipHdr = (req.headers["x-forwarded-for"] as string) || "";
+            const ip = (ipHdr.split(",")[0] || req.ip || "").trim() || null;
+            const ua = req.get("user-agent") || null;
+
+            await this.pg.query(
+                `
+        INSERT INTO sessions (user_id, jti, user_agent, ip)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (jti) DO UPDATE
+           SET last_seen_at = now(),
+               user_agent   = COALESCE(EXCLUDED.user_agent, sessions.user_agent),
+               ip           = COALESCE(EXCLUDED.ip, sessions.ip)
+        `,
+                [String(payload.sub), jti, ua, ip],
+            );
+        }
+
+        (req as any).jti = jti;
+
+        // Best-effort "touch"
+        if (jti) {
+            const ipHdr = (req.headers["x-forwarded-for"] as string) || "";
+            const ip = (ipHdr.split(",")[0] || req.ip || "").trim() || null;
+            const ua = req.get("user-agent") || null;
+            this.pg
+                .query(
+                    `UPDATE sessions
+             SET last_seen_at = now(),
+                 ip = COALESCE($2, ip),
+                 user_agent = COALESCE($3, user_agent)
+           WHERE jti = $1 AND revoked_at IS NULL`,
+                    [jti, ip, ua],
+                )
+                .catch(() => { });
+        }
+
+        return true;
+    }
+}
+
+########## END FILE:   src\auth\auth-cookie.guard.ts ##########
+
+########## BEGIN FILE: src\auth\auth-cookie.middleware.ts ##########
+import { Injectable, NestMiddleware } from "@nestjs/common";
+import type { Request, Response, NextFunction } from "express";
+import { JwtService } from "@nestjs/jwt";
+import { PgPoolService } from "../storage/pg-pool.service";
+
+const SESSION_IDLE_UPDATE_SECS =
+    parseInt(process.env.SESSION_IDLE_UPDATE_SECS || "300", 10) || 300;
+
+@Injectable()
+export class AuthCookieMiddleware implements NestMiddleware {
+    private readonly cookieName: string;
+
+    constructor(
+        private readonly jwt: JwtService,
+        private readonly pg: PgPoolService,
+    ) {
+        this.cookieName = process.env.AUTH_COOKIE_NAME || "auth_token";
+    }
+
+    async use(req: Request & { user?: any; jti?: string }, res: Response, next: NextFunction) {
+        try {
+            const token = (req as any).cookies?.[this.cookieName];
+            if (!token) return next();
+
+            const payload = await this.jwt.verifyAsync<any>(token, {
+                secret: process.env.JWT_SECRET ?? "dev-secret",
+            });
+
+            // Normalize to the fields your app expects AND capture JTI
+            req.user = {
+                id: payload.sub ?? payload.id,
+                email: payload.email,
+                name: payload.name,
+                role: payload.role,
+            };
+            req.jti = payload.jti;
+
+            // If we have a JTI, ensure it's not revoked and gently bump last_seen
+            if (req.jti) {
+                const { rows } = await this.pg.query<{ revoked_at: string | null; last_seen_at: string }>(
+                    `SELECT revoked_at, last_seen_at FROM sessions WHERE jti = $1 LIMIT 1`,
+                    [req.jti],
+                );
+                if (rows.length > 0) {
+                    if (rows[0].revoked_at) {
+                        return res.status(401).json({ message: "Session revoked." });
+                    }
+                    const lastSeen = new Date(rows[0].last_seen_at).getTime();
+                    const now = Date.now();
+                    if ((now - lastSeen) / 1000 > SESSION_IDLE_UPDATE_SECS) {
+                        await this.pg.query(`UPDATE sessions SET last_seen_at = now() WHERE jti = $1`, [req.jti]);
+                    }
+                }
+            }
+        } catch {
+            // ignore broken/expired token; route can still choose to 401
+        }
+        next();
+    }
+}
+
+########## END FILE:   src\auth\auth-cookie.middleware.ts ##########
+
+########## BEGIN FILE: src\auth\auth.controller.ts ##########
+import { Body, Controller, Get, Post, Req, Res } from "@nestjs/common";
+import { ApiOkResponse, ApiTags } from "@nestjs/swagger";
+import type { Request, Response } from "express";
+import { LoginDto } from "./dto/login.dto";
+import { UserAuthService } from "./user-auth.service";
+
+@ApiTags("auth")
+@Controller("api/auth")
+export class AuthController {
+    constructor(private readonly users: UserAuthService) { }
+
+    @Post("login")
+    @ApiOkResponse({ description: "Sets auth cookie on success" })
+    async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+        // 1) Validate user
+        const user = await this.users.validateUser(dto.email, dto.password);
+
+        // 2) Issue JWT with JTI
+        const { token, jti } = await this.users.signWithJti(user);
+
+        // 3) Record session
+        const ua = req.headers["user-agent"] || "";
+        const ip =
+            (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+            (req.socket as any)?.remoteAddress ||
+            "";
+        await this.users.recordSessionOnLogin(user.id, jti, String(ua), String(ip));
+
+        // 4) Set cookie
+        const cookieName = process.env.AUTH_COOKIE_NAME || "auth_token";
+        const maxAgeMs = Number(process.env.AUTH_COOKIE_MAX_AGE_MS || 7 * 24 * 60 * 60 * 1000); // 7d
+        res.cookie(cookieName, token, {
+            httpOnly: true,
+            sameSite: "lax",
+            secure: process.env.NODE_ENV === "production",
+            path: "/",
+            maxAge: maxAgeMs,
+        });
+
+        return { user };
+    }
+
+    @Post("logout")
+    @ApiOkResponse({ description: "Clears auth cookie" })
+    async logout(@Res({ passthrough: true }) res: Response) {
+        const cookieName = process.env.AUTH_COOKIE_NAME || "auth_token";
+        res.clearCookie(cookieName, { path: "/" });
+        return { ok: true };
+    }
+
+    @Get("me")
+    @ApiOkResponse({ description: "Current user (if authenticated)" })
+    async me(@Req() req: Request) {
+        const cookieName = process.env.AUTH_COOKIE_NAME || "auth_token";
+        const token = (req as any).cookies?.[cookieName];
+        if (!token) return { user: null };
+        const user = await this.users.verify(token);
+        return { user };
+    }
+}
+
+########## END FILE:   src\auth\auth.controller.ts ##########
+
+########## BEGIN FILE: src\auth\auth.module.ts ##########
+import { Module } from "@nestjs/common";
+import { JwtModule } from "@nestjs/jwt";
+import { DatabaseModule } from "../database/database.module";
+import { StorageModule } from "../storage/storage.module";
+import { AuthService } from "./auth.service";
+import { AuthController } from "./auth.controller";
+import { UserAuthService } from "./user-auth.service";
+
+function parseExpiresToSeconds(input: string | undefined, fallbackSeconds: number): number {
+  if (!input) return fallbackSeconds;
+  if (/^\d+$/.test(input)) return Number(input);
+  const m = input.trim().match(/^(\d+)\s*([smhd])$/i);
+  if (!m) return fallbackSeconds;
+  const n = Number(m[1]);
+  const unit = m[2].toLowerCase();
+  const factor = unit === "s" ? 1 : unit === "m" ? 60 : unit === "h" ? 3600 : unit === "d" ? 86400 : 1;
+  return n * factor;
+}
+const EXPIRES_IN_SECONDS = parseExpiresToSeconds(process.env.JWT_EXPIRES, 60 * 60 * 24 * 7);
+
+@Module({
+  imports: [
+    DatabaseModule,
+    StorageModule,
+    JwtModule.register({
+      secret: process.env.JWT_SECRET ?? "dev-secret",
+      signOptions: { expiresIn: EXPIRES_IN_SECONDS },
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [AuthService, UserAuthService],
+  exports: [AuthService, UserAuthService, JwtModule],
+})
+export class AuthModule { }
+
+########## END FILE:   src\auth\auth.module.ts ##########
+
+########## BEGIN FILE: src\auth\auth.service.ts ##########
+//backend\src\auth\auth.service.ts
+
+import {
+  Injectable,
+  UnauthorizedException,
+  InternalServerErrorException,
+  Logger,
+  Inject,
+} from "@nestjs/common";
+import { PrismaService } from "../database/prisma.service";
+import { createHash, randomBytes } from "node:crypto";
+
+function newOpaqueToken(): string {
+  return randomBytes(18).toString("base64url");
+}
+function hashToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+type EnrollInput = {
+  enrollmentSecret: string;
+  deviceId: string;
+  hostname: string;
+  os: string;
+  arch: string;
+  version: string;
+};
+
+@Injectable()
+export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) { }
+
+  /**
+   * Enroll (or re-enroll) an agent.
+   * - Validates the shared enrollment secret
+   * - If deviceId exists, rotates token & updates metadata
+   * - Otherwise creates a new agent
+   * - Returns { agentId, agentToken }
+   */
+  async enrollAgent(input: EnrollInput) {
+    const expected = process.env.ENROLLMENT_SECRET || "";
+    if (!expected || input.enrollmentSecret !== expected) {
+      throw new UnauthorizedException("Invalid enrollment secret");
+    }
+
+    try {
+      const token = newOpaqueToken();
+      const tokenHash = hashToken(token);
+
+      // Look up existing agent by deviceId to avoid duplicates
+      const existing = await this.prisma.agent.findFirst({
+        where: { deviceId: input.deviceId },
+        select: { id: true },
+      });
+
+      let agentId: string;
+
+      if (existing) {
+        const updated = await this.prisma.agent.update({
+          where: { id: existing.id },
+          data: {
+            hostname: input.hostname,
+            os: input.os,
+            arch: input.arch,
+            version: input.version,
+            tokenHash,              // rotate token on re-enroll
+            // Optionally mark presence immediately:
+            // lastHeartbeatAt: new Date(),
+          },
+          select: { id: true },
+        });
+        agentId = updated.id;
+        this.logger.log(`Re-enrolled agent ${agentId} (deviceId=${input.deviceId}).`);
+      } else {
+        const created = await this.prisma.agent.create({
+          data: {
+            deviceId: input.deviceId,
+            hostname: input.hostname,
+            os: input.os,
+            arch: input.arch,
+            version: input.version,
+            tokenHash,
+            // Optionally mark presence immediately:
+            // lastHeartbeatAt: new Date(),
+          },
+          select: { id: true },
+        });
+        agentId = created.id;
+        this.logger.log(`Enrolled new agent ${agentId} (deviceId=${input.deviceId}).`);
+      }
+
+      return { agentId, agentToken: token };
+    } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      this.logger.error(`Enroll failed: ${msg}`, e?.stack ?? undefined);
+      // Be verbose in dev, generic in prod
+      const dev = (process.env.NODE_ENV || "").toLowerCase() === "development";
+      throw new InternalServerErrorException(dev ? `Enroll failed: ${msg}` : "Enroll failed");
+    }
+  }
+
+  /**
+   * Validate an agent’s bearer token (opaque string).
+   * Returns the agentId on success, or null on failure.
+   */
+  async validateAgentToken(rawToken: string): Promise<string | null> {
+    const tokenHash = hashToken(rawToken);
+    const found = await this.prisma.agent.findUnique({ where: { tokenHash } });
+    return found?.id ?? null;
+  }
+}
+
+########## END FILE:   src\auth\auth.service.ts ##########
+
+########## BEGIN FILE: src\auth\dto\login.dto.ts ##########
+// backend/src/auth/dto/login.dto.ts
+import { IsEmail, IsString, MinLength, MaxLength, Matches } from "class-validator";
+import { Transform } from "class-transformer";
+
+export class LoginDto {
+    @Transform(({ value }) => (typeof value === "string" ? value.trim().toLowerCase() : value))
+    @IsEmail()
+    email!: string;
+
+    @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+    @IsString()
+    @MinLength(8)
+    @MaxLength(128)
+    // Optional: uncomment to require at least one letter and one number/symbol
+    // @Matches(/^(?=.*[A-Za-z])(?=.*[\d\W]).+$/, {
+    //   message: "password must include letters and numbers or symbols",
+    // })
+    password!: string;
+}
+
+########## END FILE:   src\auth\dto\login.dto.ts ##########
+
+########## BEGIN FILE: src\common\guards\admin-api.guard.ts ##########
+import {
+    CanActivate,
+    ExecutionContext,
+    Injectable,
+    UnauthorizedException,
+} from "@nestjs/common";
+
+/**
+ * Simple header-based guard:
+ * - If ADMIN_API_KEY is not set, allow (dev-friendly)
+ * - If set, require header: x-admin-api-key: <ADMIN_API_KEY>
+ */
+@Injectable()
+export class AdminApiGuard implements CanActivate {
+    canActivate(ctx: ExecutionContext): boolean {
+        const req = ctx.switchToHttp().getRequest();
+        const provided = req.headers["x-admin-api-key"] as string | undefined;
+
+        // Dev fallback: no key set => allow
+        const expected = process.env.ADMIN_API_KEY?.trim();
+        if (!expected) return true;
+
+        if (provided && provided === expected) return true;
+        throw new UnauthorizedException("Invalid admin API key");
+    }
+}
+
+########## END FILE:   src\common\guards\admin-api.guard.ts ##########
+
+########## BEGIN FILE: src\main.ts ##########
+import "reflect-metadata";
+import "dotenv/config";
+import { NestFactory } from "@nestjs/core";
+import { AppModule } from "./app.module";
+import cookieParser from "cookie-parser";
+import { WsAdapter } from "@nestjs/platform-ws";
+import { ValidationPipe, INestApplication } from "@nestjs/common";
+import * as fs from "fs";
+import * as path from "path";
+
+/** Mount /docs only when allowed (and if @nestjs/swagger is present). */
+async function maybeSetupSwagger(app: INestApplication) {
+  const enableSwagger =
+    (process.env.SWAGGER ?? "").toLowerCase() === "true" ||
+    process.env.NODE_ENV !== "production";
+
+  if (!enableSwagger) {
+    console.log("Swagger disabled (set SWAGGER=true to enable).");
+    return;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { SwaggerModule, DocumentBuilder } = require("@nestjs/swagger");
+    const config = new DocumentBuilder()
+      .setTitle("RemoteIQ API")
+      .setDescription("OpenAPI for RemoteIQ RMM")
+      .setVersion("v1")
+      .addBearerAuth({ type: "http", scheme: "bearer", bearerFormat: "JWT" }, "bearer")
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup("/docs", app, document);
+    console.log("Swagger docs mounted at /docs");
+  } catch {
+    console.log("Swagger not installed. Skip docs (pnpm add -D @nestjs/swagger swagger-ui-express)");
+  }
+}
+
+function configureCors(app: INestApplication) {
+  const isProd = process.env.NODE_ENV === "production";
+
+  const listFromFrontends =
+    (process.env.FRONTEND_ORIGINS || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+  const listFromAllowed = (process.env.ALLOWED_ORIGIN || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const origins = listFromFrontends.length ? listFromFrontends : listFromAllowed;
+
+  if (isProd && origins.length > 0) {
+    app.enableCors({
+      origin: origins,
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization", "x-admin-api-key"],
+      exposedHeaders: ["Content-Length"],
+    });
+    console.log("CORS restricted to:", origins);
+  } else {
+    app.enableCors({
+      origin: (_origin, cb) => cb(null, true),
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization", "x-admin-api-key"],
+      exposedHeaders: ["Content-Length"],
+    });
+    console.log("CORS open (dev). Set FRONTEND_ORIGINS or ALLOWED_ORIGIN for prod.");
+  }
+}
+
+async function bootstrap() {
+  // Ensure uploads directory exists (multer doesn't create it)
+  const uploadsDir = path.join(process.cwd(), "public", "uploads");
+  if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+  const app = await NestFactory.create(AppModule);
+
+  app.use(cookieParser());
+  configureCors(app);
+
+  app.useWebSocketAdapter(new WsAdapter(app));
+
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    })
+  );
+
+  app.enableShutdownHooks();
+
+  app.getHttpAdapter().getInstance().get("/healthz", (_req: any, res: any) => res.send("OK"));
+
+  await maybeSetupSwagger(app);
+
+  const port = Number(process.env.PORT || 3001);
+  await app.listen(port);
+  console.log(`API up on http://localhost:${port}`);
+}
+bootstrap();
+
+########## END FILE:   src\main.ts ##########
+
+########## BEGIN FILE: src\storage\pg-pool.service.ts ##########
+//backend\src\storage\pg-pool.service.ts
+
+import { Injectable, OnModuleDestroy } from "@nestjs/common";
+
+// We use require() + loose typing to avoid the “Cannot use namespace … as a type” errors
+// that can happen in some TS configs when importing from 'pg'.
+const { Pool } = require("pg") as { Pool: any };
+
+export type PgRuntimeConfig = {
+    connectionString?: string;
+    ssl?: boolean | object;
+    max?: number;
+    min?: number;
+};
+
+@Injectable()
+export class PgPoolService implements OnModuleDestroy {
+    private pool: any = null;
+    private lastKey: string | null = null;
+
+    /** Build a default config from env (used on first access if not configured) */
+    private envConfig(): PgRuntimeConfig {
+        const url =
+            process.env.DATABASE_URL ||
+            process.env.PG_URL ||
+            "postgres://remoteiq:remoteiqpass@localhost:5432/remoteiq";
+
+        const ssl =
+            (process.env.DATABASE_SSL ?? "").toLowerCase() === "true" ? true : false;
+
+        const max = Number.isFinite(+process.env.DATABASE_POOL_MAX!)
+            ? Number(process.env.DATABASE_POOL_MAX)
+            : 10;
+        const min = Number.isFinite(+process.env.DATABASE_POOL_MIN!)
+            ? Number(process.env.DATABASE_POOL_MIN)
+            : 0;
+
+        return { connectionString: url, ssl, max, min };
+    }
+
+    /** Create a stable key for the current config so we can know when to recreate the pool */
+    private keyOf(cfg: PgRuntimeConfig): string {
+        return JSON.stringify({
+            cs: cfg.connectionString ?? "",
+            ssl: cfg.ssl ? "1" : "0",
+            max: cfg.max ?? 10,
+            min: cfg.min ?? 0,
+        });
+    }
+
+    private makePool(cfg: PgRuntimeConfig): any {
+        const base: any = {
+            connectionString: cfg.connectionString,
+            max: cfg.max ?? 10,
+            min: cfg.min ?? 0,
+        };
+        if (cfg.ssl) {
+            base.ssl = cfg.ssl === true ? { rejectUnauthorized: false } : cfg.ssl;
+        }
+        return new Pool(base);
+    }
+
+    /** Ensure pool exists; create from env if needed */
+    private ensurePool(): any {
+        if (!this.pool) {
+            const cfg = this.envConfig();
+            this.lastKey = this.keyOf(cfg);
+            this.pool = this.makePool(cfg);
+        }
+        return this.pool!;
+    }
+
+    /**
+     * Called by admin bootstrap when the database config changes.
+     * Recreates the pool if the effective config differs.
+     */
+    configure(cfg: PgRuntimeConfig) {
+        const nextKey = this.keyOf(cfg);
+        if (this.pool && this.lastKey === nextKey) return; // no-op
+
+        // tear down previous pool
+        if (this.pool) {
+            try {
+                this.pool.end().catch(() => { });
+            } catch { }
+            this.pool = null;
+        }
+
+        this.pool = this.makePool(cfg);
+        this.lastKey = nextKey;
+    }
+
+    async query<T = any>(text: string, params?: any[]): Promise<{ rows: T[] }> {
+        const res = await this.ensurePool().query(text, params);
+        return { rows: res.rows as T[] };
+    }
+
+    async onModuleDestroy() {
+        if (this.pool) {
+            try {
+                await this.pool.end();
+            } catch { }
+            this.pool = null;
+        }
+    }
+}
+
+########## END FILE:   src\storage\pg-pool.service.ts ##########
+
+########## BEGIN FILE: src\storage\storage.module.ts ##########
+//backend\src\storage\storage.module.ts
+
+import { Module } from "@nestjs/common";
+import { PgPoolService } from "./pg-pool.service";
+import { PgBootstrap } from "./pg.bootstrap";
+
+@Module({
+    providers: [PgPoolService, PgBootstrap],
+    exports: [PgPoolService],
+})
+export class StorageModule { }
+
+########## END FILE:   src\storage\storage.module.ts ##########
+
+########## BEGIN FILE: src\users\me.controller.ts ##########
+//backend\src\users\me.controller.ts
+
+import {
+    Controller,
+    Get,
+    Patch,
+    Body,
+    UseInterceptors,
+    UploadedFile,
+    Post,
+    Delete,
+    Req,
+    BadRequestException,
+    UnauthorizedException,
+} from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { diskStorage } from "multer";
+import type { Request } from "express";
+import { MeService } from "./me.service";
+
+/* ----------------------------- MIME → EXT map ----------------------------- */
+const EXT_BY_MIME: Record<string, string> = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+};
+
+/* ----------------------------- Rate limit (simple) ----------------------------- */
+/** Allow one upload per user every 5 seconds (in-memory, per-instance). */
+const UPLOAD_RATE_MS = 5_000;
+const lastUploadByUser = new Map<string, number>();
+
+/* ----------------------------- Multer callbacks ----------------------------- */
+/** filename: (req, file, cb: (err: Error|null, filename: string) => void) => void */
+function filenameCb(
+    _req: any,
+    file: Express.Multer.File,
+    callback: (error: Error | null, filename: string) => void,
+) {
+    // derive extension from mime for consistency and safety
+    const ext = EXT_BY_MIME[file.mimetype] ?? ".bin";
+    // remove suspicious chars from provided name (if we keep it), and trim to avoid gigantic filenames
+    const base =
+        (file.originalname || "upload")
+            .replace(/[^\w.\-]+/g, "_")
+            .replace(/\.[A-Za-z0-9]+$/, "") // strip user-provided extension
+            .slice(0, 80) || "upload";
+    const safe = `${Date.now()}_${base}${ext}`;
+    callback(null, safe);
+}
+
+/** fileFilter: (req, file, cb: (err: Error|null, accept: boolean) => void) => void */
+function imageFilter(
+    _req: any,
+    file: Express.Multer.File,
+    callback: (error: Error | null, acceptFile: boolean) => void,
+) {
+    const ok = !!EXT_BY_MIME[file.mimetype];
+    if (!ok) return callback(new BadRequestException("Unsupported file type"), false);
+    return callback(null, true);
+}
+
+/* ----------------------------- URL Builder ----------------------------- */
+/**
+ * Build an ABSOLUTE URL to the static mount that always works and never double-prefixes.
+ * Rules:
+ * - If PUBLIC_BASE_URL is set, use it as the host origin (no trailing slash).
+ * - Otherwise derive protocol/host from the request.
+ * - Ensure exactly one '/static' segment before '/uploads/...'.
+ *
+ * Examples that all yield a single '/static/uploads/...':
+ *   PUBLIC_BASE_URL=http://localhost:3001         -> http://localhost:3001/static/uploads/<file>
+ *   PUBLIC_BASE_URL=http://localhost:3001/static  -> http://localhost:3001/static/uploads/<file>
+ *   PUBLIC_BASE_URL not set                       -> http(s)://<req host>/static/uploads/<file>
+ */
+function buildStaticUploadUrl(req: Request, filename: string): string {
+    const raw = (process.env.PUBLIC_BASE_URL || "").trim().replace(/\/+$/, ""); // strip trailing '/'
+    let origin: string;
+    if (raw) {
+        // If the env already ends with '/static', keep it; else append '/static'
+        const staticBase = raw.endsWith("/static") ? raw : `${raw}/static`;
+        origin = staticBase;
+    } else {
+        // derive from request
+        const proto =
+            (req.headers["x-forwarded-proto"] as string) ||
+            (req.protocol || "http");
+        const host = req.get("host") || "localhost:3001";
+        origin = `${proto}://${host}/static`;
+    }
+    return `${origin}/uploads/${encodeURIComponent(filename)}`;
+}
+
+@Controller("/api/users")
+export class MeController {
+    constructor(private readonly me: MeService) { }
+
+    // Current user profile
+    @Get("me")
+    async getMe(@Req() req: any) {
+        const userId = req.user?.id; // set by your cookie middleware
+        if (!userId) throw new UnauthorizedException("Not authenticated");
+        return this.me.getMe(userId);
+    }
+
+    // Partial update
+    @Patch("me")
+    async patchMe(@Req() req: any, @Body() body: any) {
+        const userId = req.user?.id;
+        if (!userId) throw new UnauthorizedException("Not authenticated");
+        return this.me.updateMe(userId, body);
+    }
+
+    // Upload avatar (multipart/form-data; field name: "file")
+    @Post("me/avatar")
+    @UseInterceptors(
+        FileInterceptor("file", {
+            storage: diskStorage({
+                destination: "public/uploads",
+                filename: filenameCb,
+            }),
+            limits: {
+                fileSize: Math.max(
+                    1,
+                    (Number(process.env.AVATAR_MAX_MB) || 5) * 1024 * 1024,
+                ), // default 5 MB
+            },
+            fileFilter: imageFilter,
+        }),
+    )
+    async uploadAvatar(@Req() req: Request & { user?: any }, @UploadedFile() file: Express.Multer.File) {
+        const userId = req.user?.id;
+        if (!userId) throw new UnauthorizedException("Not authenticated");
+        if (!file) throw new BadRequestException("No file uploaded");
+
+        // rate-limit: N ms between uploads per user
+        const now = Date.now();
+        const last = lastUploadByUser.get(userId) || 0;
+        if (now - last < UPLOAD_RATE_MS) {
+            throw new BadRequestException("You're uploading too fast. Please wait a moment and try again.");
+        }
+        lastUploadByUser.set(userId, now);
+
+        // Build a correct, absolute URL that points to ServeStatic '/static'
+        const url = buildStaticUploadUrl(req, file.filename);
+
+        // Save in DB; also sets avatar_thumb_url (same as main for now) and deletes previous local file if any
+        await this.me.replaceAvatarUrl(userId, url);
+
+        return { url };
+    }
+
+    // Remove avatar
+    @Delete("me/avatar")
+    async deleteAvatar(@Req() req: any) {
+        const userId = req.user?.id;
+        if (!userId) throw new UnauthorizedException("Not authenticated");
+
+        await this.me.replaceAvatarUrl(userId, null);
+        return { ok: true };
+    }
+}
+
+########## END FILE:   src\users\me.controller.ts ##########
+
+########## BEGIN FILE: src\users\me.service.ts ##########
+import { Injectable } from "@nestjs/common";
+import { PgPoolService } from "../storage/pg-pool.service";
+import * as fs from "fs/promises";
+import * as path from "path";
+
+@Injectable()
+export class MeService {
+    constructor(private readonly pg: PgPoolService) { }
+
+    // Compose a public URL for files served from /public (not used by controller anymore, but kept for compatibility)
+    makePublicUrl(filename: string) {
+        const base = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
+        const staticBase = base ? (base.endsWith("/static") ? base : `${base}/static`) : "";
+        return staticBase ? `${staticBase}/uploads/${filename}` : `/static/uploads/${filename}`;
+    }
+
+    /* ------------------------------ Helpers for local file cleanup ------------------------------ */
+
+    /** Extract a local filesystem path for files under `/static/uploads/<name>` or `/uploads/<name>` */
+    private toLocalUploadPathFromUrl(url?: string | null): string | null {
+        if (!url) return null;
+        let pathname = "";
+        try {
+            // absolute http(s) url
+            const u = new URL(url);
+            pathname = u.pathname;
+        } catch {
+            // not a full URL; treat as pathname-like
+            pathname = url;
+        }
+
+        // Normalize where '/uploads/...' might appear (with or without /static prefix)
+        const idx = pathname.indexOf("/uploads/");
+        if (idx === -1) return null;
+
+        const filename = pathname.substring(idx + "/uploads/".length);
+        if (!filename || filename.includes("..")) return null;
+
+        // Resolve to <project>/public/uploads/<filename>
+        const uploadsDir = path.join(__dirname, "..", "public", "uploads");
+        const abs = path.join(uploadsDir, filename);
+
+        // Ensure file stays inside uploads dir (avoid traversal)
+        const normUploads = path.normalize(uploadsDir + path.sep);
+        const normFile = path.normalize(abs);
+        if (!normFile.startsWith(normUploads)) return null;
+
+        return normFile;
+    }
+
+    private async tryDeleteLocalFile(filePath: string | null) {
+        if (!filePath) return;
+        try {
+            await fs.unlink(filePath);
+        } catch {
+            // swallow (file may not exist or we lack perms; not fatal)
+        }
+    }
+
+    /* ------------------------------------ Profile CRUD ------------------------------------ */
+
+    async getMe(userId: string) {
+        const q = `
+      select id, name, email,
+             coalesce(phone, '') as phone,
+             coalesce(timezone, '') as timezone,
+             coalesce(locale, '') as locale,
+             coalesce(avatar_url, '') as "avatarUrl",
+             coalesce(avatar_thumb_url, '') as "avatarThumbUrl",
+             coalesce(address1, '') as address1,
+             coalesce(address2, '') as address2,
+             coalesce(city, '') as city,
+             coalesce(state, '') as state,
+             coalesce(postal, '') as postal,
+             coalesce(country, '') as country
+      from users
+      where id = $1
+      limit 1
+    `;
+        const { rows } = await this.pg.query(q, [userId]);
+        return rows[0] || {};
+    }
+
+    async updateMe(userId: string, patch: Record<string, any>) {
+        // Only accept known columns; convert avatarUrl -> avatar_url
+        const map: Record<string, string> = {
+            name: "name",
+            email: "email",
+            phone: "phone",
+            timezone: "timezone",
+            locale: "locale",
+            avatarUrl: "avatar_url",
+            address1: "address1",
+            address2: "address2",
+            city: "city",
+            state: "state",
+            postal: "postal",
+            country: "country",
+        };
+
+        const sets: string[] = [];
+        const vals: any[] = [];
+        let i = 1;
+
+        for (const [k, v] of Object.entries(patch || {})) {
+            const col = map[k];
+            if (!col) continue;
+            sets.push(`${col} = $${i++}`);
+            vals.push(v);
+            // keep thumb in sync if avatarUrl is set directly through PATCH
+            if (col === "avatar_url") {
+                sets.push(`avatar_thumb_url = $${i++}`);
+                vals.push(v);
+            }
+        }
+        if (sets.length === 0) {
+            return this.getMe(userId);
+        }
+        vals.push(userId);
+
+        const sql = `update users set ${sets.join(", ")}, updated_at = now() where id = $${i} returning id`;
+        await this.pg.query(sql, vals);
+        return this.getMe(userId);
+    }
+
+    /**
+     * Replace avatar URLs and delete the previous local file (if any and if it was under /uploads).
+     * If `nextUrl` is null, clears both avatar fields and removes old local file.
+     */
+    async replaceAvatarUrl(userId: string, nextUrl: string | null) {
+        // first, read previous urls
+        const { rows: prevRows } = await this.pg.query<{ avatar_url: string | null; avatar_thumb_url: string | null }>(
+            `select avatar_url, avatar_thumb_url from users where id = $1 limit 1`,
+            [userId],
+        );
+        const prev = prevRows[0] || { avatar_url: null, avatar_thumb_url: null };
+
+        // upsert new URL(s); for now thumb mirrors the main url
+        await this.pg.query(
+            `update users
+         set avatar_url = $2,
+             avatar_thumb_url = $3,
+             updated_at = now()
+       where id = $1`,
+            [userId, nextUrl, nextUrl],
+        );
+
+        // delete the previous local file if it lived under /uploads and is different than new
+        const oldUrl = prev.avatar_url;
+        if (oldUrl && oldUrl !== nextUrl) {
+            const localPath = this.toLocalUploadPathFromUrl(oldUrl);
+            await this.tryDeleteLocalFile(localPath);
+        }
+
+        // return updated profile
+        return this.getMe(userId);
+    }
+
+    /** Kept for compatibility with earlier calls; now delegates to replaceAvatarUrl */
+    async setAvatarUrl(userId: string, url: string | null) {
+        return this.replaceAvatarUrl(userId, url);
+    }
+}
+
+########## END FILE:   src\users\me.service.ts ##########
+
+########## BEGIN FILE: src\users\security.controller.ts ##########
+import {
+    Body,
+    Controller,
+    Delete,
+    Get,
+    HttpCode,
+    HttpException,
+    HttpStatus,
+    Inject,
+    Param,
+    Post,
+    Req,
+    UnauthorizedException,
+    UseGuards,
+} from "@nestjs/common";
+import type { Request } from "express";
+import { SecurityService } from "./security.service";
+import {
+    IsBoolean,
+    IsOptional,
+    IsString,
+    Length,
+    IsUUID,
+    MinLength,
+} from "class-validator";
+import { plainToInstance } from "class-transformer";
+import { validateSync } from "class-validator";
+import { AuthCookieGuard } from "../auth/auth-cookie.guard";
+
+/* ---------------- DTOs ---------------- */
+
+class ChangePasswordDto {
+    @IsString()
+    current!: string;
+
+    @IsString()
+    @MinLength(parseInt(process.env.PASSWORD_MIN_LEN || "8", 10) || 8)
+    next!: string;
+}
+
+class TotpConfirmDto {
+    @IsString()
+    @Length(6, 6)
+    code!: string;
+}
+
+class TotpDisableDto {
+    @IsOptional()
+    @IsString()
+    @Length(6, 6)
+    code?: string;
+
+    @IsOptional()
+    @IsString()
+    recoveryCode?: string;
+}
+
+class RevokeSessionDto {
+    @IsString()
+    @IsUUID()
+    sessionId!: string;
+}
+
+class CreateTokenDto {
+    @IsString()
+    name!: string;
+}
+
+class RevokeTokenDto {
+    @IsString()
+    @IsUUID()
+    id!: string;
+}
+
+class TrustDto {
+    @IsBoolean()
+    trusted!: boolean;
+}
+
+/** validate without relying on global pipes */
+function assertDto<T>(cls: new () => T, payload: any) {
+    const inst = plainToInstance(cls, payload, { enableImplicitConversion: true });
+    const errs = validateSync(inst as any, {
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+    });
+    if (errs.length) {
+        const msg =
+            errs[0]?.constraints && Object.values(errs[0].constraints)[0]
+                ? Object.values(errs[0].constraints)[0]
+                : "Validation failed";
+        throw new HttpException(msg, HttpStatus.BAD_REQUEST);
+    }
+    return inst;
+}
+
+/* -------------------------------- Controller -------------------------------- */
+
+@Controller("/api/users/me")
+@UseGuards(AuthCookieGuard) // ensures req.user and req.jti are populated
+export class SecurityController {
+    constructor(@Inject(SecurityService) private readonly security: SecurityService) { }
+
+    // -------- Overview --------
+    @Get("security")
+    async getOverview(@Req() req: Request) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        return this.security.securityOverview(user.id, (req as any).jti);
+    }
+
+    // -------- Password --------
+    @Post("password")
+    async changePassword(@Req() req: Request, @Body() body: any) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        const dto = assertDto(ChangePasswordDto, body);
+        await this.security.changePassword(user.id, dto.current, dto.next);
+        return { ok: true };
+    }
+
+    // -------- TOTP 2FA --------
+    @Post("2fa/start")
+    async start2fa(@Req() req: Request) {
+        const user = (req as any).user;
+        if (!user?.id || !user?.email) throw new UnauthorizedException();
+        return this.security.start2fa(user.id, user.email);
+    }
+
+    @Post("2fa/confirm")
+    async confirm2fa(@Req() req: Request, @Body() body: any) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        const dto = assertDto(TotpConfirmDto, body);
+        const clean = (dto.code || "").replace(/\D/g, "").slice(-6);
+        if (clean.length !== 6) {
+            throw new HttpException("Invalid TOTP code format.", HttpStatus.BAD_REQUEST);
+        }
+        const recoveryCodes = await this.security.confirm2fa(user.id, clean);
+        return { recoveryCodes };
+    }
+
+    @Post("2fa/disable")
+    async disable2fa(@Req() req: Request, @Body() body: any) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        const dto = assertDto(TotpDisableDto, body);
+        const clean = dto.code ? dto.code.replace(/\D/g, "").slice(-6) : undefined;
+        await this.security.disable2fa(user.id, clean, dto.recoveryCode);
+        return { ok: true };
+    }
+
+    @Post("2fa/recovery/regen")
+    async regenCodes(@Req() req: Request) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        const codes = await this.security.regenerateRecoveryCodes(user.id);
+        return { recoveryCodes: codes };
+    }
+
+    // -------- Sessions --------
+
+    // Support both with & without trailing slash (FE sometimes hits /)
+    @Get("sessions")
+    async listSessionsNoSlash(@Req() req: Request) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        return this.security.listSessions(user.id, (req as any).jti);
+    }
+
+    @Get("sessions/")
+    async listSessionsSlash(@Req() req: Request) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        return this.security.listSessions(user.id, (req as any).jti);
+    }
+
+    // Trust / Untrust a session
+    @Post("sessions/:id/trust")
+    async trust(@Req() req: Request, @Param("id") id: string, @Body() body: any) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        const dto = assertDto(TrustDto, body);
+        return this.security.setSessionTrust(user.id, id, dto.trusted);
+    }
+
+    // DELETE /api/users/me/sessions/:id  (blocks current inside the service)
+    @Delete("sessions/:id")
+    @HttpCode(204)
+    async revokeOne(@Req() req: Request, @Param("id") id: string) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        await this.security.revokeSession(user.id, id, (req as any).jti);
+        return;
+    }
+
+    // Optional back-compat: POST body { sessionId }
+    @Post("sessions/revoke")
+    async revokeSession(@Req() req: Request, @Body() body: any) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        const dto = assertDto(RevokeSessionDto, body);
+        await this.security.revokeSession(user.id, dto.sessionId, (req as any).jti);
+        return { ok: true };
+    }
+
+    // POST /api/users/me/sessions/revoke-all
+    @Post("sessions/revoke-all")
+    @HttpCode(204)
+    async revokeAllOther(@Req() req: Request) {
+        const user = (req as any).user;
+        const currentJti = (req as any).jti;
+        if (!user?.id) throw new UnauthorizedException();
+        await this.security.revokeAllOtherSessions(user.id, currentJti);
+        return;
+    }
+
+    // -------- Personal Tokens --------
+    @Get("tokens")
+    async listTokens(@Req() req: Request) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        return this.security.listTokens(user.id);
+    }
+
+    @Post("tokens")
+    async createToken(@Req() req: Request, @Body() body: any) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        const dto = assertDto(CreateTokenDto, body);
+        return this.security.createToken(user.id, dto.name);
+    }
+
+    @Post("tokens/revoke")
+    async revokeToken(@Req() req: Request, @Body() body: any) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        const dto = assertDto(RevokeTokenDto, body);
+        await this.security.revokeToken(user.id, dto.id);
+        return { ok: true };
+    }
+
+    // -------- WebAuthn (stubs) --------
+    @Get("webauthn/create-options")
+    async webauthnCreate(@Req() req: Request) {
+        const user = (req as any).user;
+        if (!user?.id || !user?.email) throw new UnauthorizedException();
+        return this.security.webauthnCreateOptions(user.id, user.email);
+    }
+
+    @Post("webauthn/finish")
+    async webauthnFinish(@Req() req: Request, @Body() body: any) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        return this.security.webauthnFinish(user.id, body);
+    }
+
+    @Delete("webauthn/:id")
+    async deleteWebAuthn(@Req() req: Request, @Param("id") id: string) {
+        const user = (req as any).user;
+        if (!user?.id) throw new UnauthorizedException();
+        return this.security.deleteWebAuthn(user.id, id);
+    }
+}
+
+########## END FILE:   src\users\security.controller.ts ##########
+
+########## BEGIN FILE: src\users\security.service.ts ##########
+import { HttpException, HttpStatus, Inject, Injectable } from "@nestjs/common";
+import * as bcrypt from "bcryptjs";
+import { authenticator } from "otplib";
+import QRCode from "qrcode";
+import { PgPoolService } from "../storage/pg-pool.service";
+
+const PASSWORD_MIN_LEN = parseInt(process.env.PASSWORD_MIN_LEN || "8", 10) || 8;
+const TOTP_ISSUER = process.env.TOTP_ISSUER || "RemoteIQ";
+const RATE_WINDOW_MS = 10_000;
+const RATE_MAX_ATTEMPTS = 5;
+const TOTP_WINDOW = parseInt(process.env.TOTP_WINDOW || "1", 10) || 1;
+
+type SessionRow = {
+    id: string;
+    user_id: string;
+    jti: string | null;
+    user_agent: string | null;
+    ip: string | null;
+    created_at: string;
+    last_seen_at: string;
+    revoked_at: string | null;
+    trusted: boolean | null;
+};
+
+type TokenRow = {
+    id: string;
+    user_id: string;
+    name: string;
+    token_hash: string;
+    created_at: string;
+    last_used_at: string | null;
+    revoked_at: string | null;
+};
+
+const rateMap = new Map<string, number[]>();
+function checkRate(key: string) {
+    const now = Date.now();
+    const arr = (rateMap.get(key) || []).filter((t) => now - t < RATE_WINDOW_MS);
+    if (arr.length >= RATE_MAX_ATTEMPTS) {
+        throw new HttpException("Too many attempts, slow down.", HttpStatus.TOO_MANY_REQUESTS);
+    }
+    arr.push(now);
+    rateMap.set(key, arr);
+}
+
+@Injectable()
+export class SecurityService {
+    constructor(@Inject(PgPoolService) private readonly pg: PgPoolService) {
+        authenticator.options = { window: TOTP_WINDOW };
+    }
+
+    /* ------------------------- Password ------------------------- */
+    async changePassword(userId: string, current: string, next: string) {
+        checkRate(`pw:${userId}`);
+        if (!next || next.length < PASSWORD_MIN_LEN) {
+            throw new HttpException(
+                `Password must be at least ${PASSWORD_MIN_LEN} characters.`,
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+        if (current === next) {
+            throw new HttpException("New password must differ from current.", HttpStatus.BAD_REQUEST);
+        }
+
+        const { rows } = await this.pg.query("SELECT password_hash FROM users WHERE id = $1", [userId]);
+        if (rows.length === 0) throw new HttpException("User not found.", HttpStatus.NOT_FOUND);
+
+        const ok = await bcrypt.compare(current, (rows[0] as any).password_hash);
+        if (!ok) throw new HttpException("Current password is incorrect.", HttpStatus.FORBIDDEN);
+
+        const newHash = await bcrypt.hash(next, 12);
+        await this.pg.query(
+            "UPDATE users SET password_hash = $1, password_updated_at = now() WHERE id = $2",
+            [newHash, userId],
+        );
+        return true;
+    }
+
+    /* ------------------------- 2FA (TOTP) ------------------------- */
+    async start2fa(userId: string, email: string) {
+        checkRate(`2fa:start:${userId}`);
+
+        const secret = authenticator.generateSecret();
+        const label = encodeURIComponent(email);
+        const issuer = encodeURIComponent(TOTP_ISSUER);
+        const otpauthUrl = `otpauth://totp/${issuer}:${label}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`;
+        const qrPngDataUrl = await QRCode.toDataURL(otpauthUrl);
+
+        await this.pg.query("UPDATE users SET totp_secret = $1 WHERE id = $2", [secret, userId]);
+        return { secret, otpauthUrl, qrPngDataUrl };
+    }
+
+    async confirm2fa(userId: string, code: string) {
+        checkRate(`2fa:confirm:${userId}`);
+
+        const { rows } = await this.pg.query("SELECT totp_secret FROM users WHERE id = $1", [userId]);
+        if (rows.length === 0) throw new HttpException("User not found.", HttpStatus.NOT_FOUND);
+        const secret = (rows[0] as any).totp_secret as string | null;
+        if (!secret) throw new HttpException("Start 2FA first.", HttpStatus.BAD_REQUEST);
+
+        const valid = authenticator.verify({ token: code, secret });
+        if (!valid) throw new HttpException("Invalid TOTP code.", HttpStatus.BAD_REQUEST);
+
+        const recoveryCodes = this.generateRecoveryCodes(8);
+        await this.pg.query(
+            `UPDATE users
+         SET two_factor_enabled = true,
+             two_factor_recovery_codes = $1
+       WHERE id = $2`,
+            [recoveryCodes, userId],
+        );
+        return recoveryCodes;
+    }
+
+    async disable2fa(userId: string, code?: string, recoveryCode?: string) {
+        checkRate(`2fa:disable:${userId}`);
+
+        const { rows } = await this.pg.query(
+            "SELECT totp_secret, two_factor_recovery_codes, two_factor_enabled FROM users WHERE id = $1",
+            [userId],
+        );
+        if (rows.length === 0) throw new HttpException("User not found.", HttpStatus.NOT_FOUND);
+
+        const row = rows[0] as any;
+        if (!row.two_factor_enabled) return;
+
+        let ok = false;
+        if (code && row.totp_secret) {
+            ok = authenticator.verify({ token: code, secret: row.totp_secret as string });
+        }
+        if (!ok && recoveryCode) {
+            const list: string[] = row.two_factor_recovery_codes || [];
+            const idx = list.findIndex((c) => c === recoveryCode);
+            if (idx >= 0) {
+                ok = true;
+                list.splice(idx, 1);
+                await this.pg.query("UPDATE users SET two_factor_recovery_codes = $1 WHERE id = $2", [
+                    list,
+                    userId,
+                ]);
+            }
+        }
+        if (!ok) throw new HttpException("Invalid code or recovery code.", HttpStatus.FORBIDDEN);
+
+        await this.pg.query(
+            `UPDATE users
+         SET two_factor_enabled = false,
+             totp_secret = NULL,
+             two_factor_recovery_codes = '{}'
+       WHERE id = $1`,
+            [userId],
+        );
+    }
+
+    async regenerateRecoveryCodes(userId: string) {
+        checkRate(`2fa:regen:${userId}`);
+
+        const { rows } = await this.pg.query("SELECT two_factor_enabled FROM users WHERE id = $1", [
+            userId,
+        ]);
+        if (rows.length === 0) throw new HttpException("User not found.", HttpStatus.NOT_FOUND);
+        if (!(rows[0] as any).two_factor_enabled) {
+            throw new HttpException("Enable 2FA first.", HttpStatus.BAD_REQUEST);
+        }
+
+        const codes = this.generateRecoveryCodes(8);
+        await this.pg.query("UPDATE users SET two_factor_recovery_codes = $1 WHERE id = $2", [
+            codes,
+            userId,
+        ]);
+        return codes;
+    }
+
+    private generateRecoveryCodes(n: number): string[] {
+        const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        const part = () => Array.from({ length: 4 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+        const code = () => `${part()}-${part()}-${part()}`;
+        return Array.from({ length: n }, code);
+    }
+
+    /* ------------------------- Sessions ------------------------- */
+
+    /** List active sessions; mark current by jti; include `trusted` */
+    async listSessions(userId: string, currentJti?: string) {
+        const { rows } = await this.pg.query<SessionRow>(
+            `
+      SELECT id,
+             user_id,
+             jti,
+             user_agent,
+             ip::text AS ip,
+             created_at,
+             last_seen_at,
+             revoked_at,
+             COALESCE(trusted, false) AS trusted
+        FROM sessions
+       WHERE user_id = $1
+         AND revoked_at IS NULL
+       ORDER BY last_seen_at DESC, created_at DESC
+      `,
+            [userId],
+        );
+
+        const items = rows.map((r) => ({
+            id: r.id,
+            createdAt: r.created_at,
+            lastSeenAt: r.last_seen_at,
+            ip: r.ip,
+            userAgent: r.user_agent || "",
+            current: currentJti ? String(r.jti ?? r.id) === String(currentJti) : false,
+            revokedAt: undefined,
+            trusted: !!r.trusted,
+        }));
+        return { items, currentJti: currentJti || "" };
+    }
+
+    /** Set trust flag on a session the user owns */
+    async setSessionTrust(userId: string, sessionId: string, trusted: boolean) {
+        const { rows } = await this.pg.query(
+            `
+      UPDATE sessions
+         SET trusted = $3
+       WHERE id = $1
+         AND user_id = $2
+         AND revoked_at IS NULL
+       RETURNING id
+      `,
+            [sessionId, userId, !!trusted],
+        );
+        if (rows.length === 0) throw new HttpException("Session not found.", HttpStatus.NOT_FOUND);
+        return { trusted: !!trusted };
+    }
+
+    /** Revoke one; blocks current */
+    async revokeSession(userId: string, sessionId: string, currentJti?: string) {
+        if (currentJti && String(sessionId) === String(currentJti)) {
+            throw new HttpException("You cannot revoke your current session.", HttpStatus.BAD_REQUEST);
+        }
+        const { rows } = await this.pg.query(
+            `UPDATE sessions
+          SET revoked_at = now()
+        WHERE id = $1
+          AND user_id = $2
+          AND revoked_at IS NULL
+      RETURNING id`,
+            [sessionId, userId],
+        );
+        if (rows.length === 0) throw new HttpException("Session not found.", HttpStatus.NOT_FOUND);
+    }
+
+    /** Revoke all others; preserves current if provided */
+    async revokeAllOtherSessions(userId: string, currentJti?: string) {
+        if (currentJti) {
+            await this.pg.query(
+                `UPDATE sessions
+            SET revoked_at = now()
+          WHERE user_id = $1
+            AND revoked_at IS NULL
+            AND (jti::text IS DISTINCT FROM $2)
+            AND (id::text  IS DISTINCT FROM $2)`,
+                [userId, String(currentJti)],
+            );
+        } else {
+            await this.pg.query(
+                `UPDATE sessions
+            SET revoked_at = now()
+          WHERE user_id = $1
+            AND revoked_at IS NULL`,
+                [userId],
+            );
+        }
+    }
+
+    /* ------------------------- Personal Tokens ------------------------- */
+    async listTokens(userId: string) {
+        const { rows } = await this.pg.query<TokenRow>(
+            `
+      SELECT id, user_id, name, token_hash, created_at, last_used_at, revoked_at
+        FROM personal_tokens
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+      `,
+            [userId],
+        );
+        return {
+            items: rows.map((r) => ({
+                id: r.id,
+                name: r.name,
+                createdAt: r.created_at,
+                lastUsedAt: r.last_used_at || undefined,
+                revokedAt: r.revoked_at || undefined,
+            })),
+        };
+    }
+
+    async createToken(userId: string, name: string) {
+        checkRate(`pat:${userId}`);
+        if (!name?.trim()) {
+            throw new HttpException("Name is required.", HttpStatus.BAD_REQUEST);
+        }
+        const tokenPlain = this.randomToken();
+        const tokenHash = await bcrypt.hash(tokenPlain, 12);
+        const ins = await this.pg.query<{ id: string }>(
+            `
+      INSERT INTO personal_tokens (user_id, name, token_hash)
+      VALUES ($1, $2, $3)
+      RETURNING id
+      `,
+            [userId, name.trim(), tokenHash],
+        );
+        return { token: tokenPlain, id: ins.rows[0].id };
+    }
+
+    async revokeToken(userId: string, id: string) {
+        const { rows } = await this.pg.query(
+            "UPDATE personal_tokens SET revoked_at = now() WHERE id = $1 AND user_id = $2 RETURNING id",
+            [id, userId],
+        );
+        if (rows.length === 0) throw new HttpException("Token not found.", HttpStatus.NOT_FOUND);
+    }
+
+    private randomToken() {
+        const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
+        return Array.from({ length: 48 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+    }
+
+    /* ------------------------- Overview ------------------------- */
+    async securityOverview(userId: string, currentJti?: string) {
+        const u = await this.pg.query("SELECT two_factor_enabled FROM users WHERE id = $1", [userId]);
+        const twoFactorEnabled = (u.rows[0] as any)?.two_factor_enabled ?? false;
+        const sess = await this.listSessions(userId, currentJti);
+        const events = (sess.items || []).slice(0, 10).map((s: any) => ({
+            id: s.id,
+            type: "signed_in" as const,
+            at: s.createdAt,
+            ip: s.ip,
+            userAgent: s.userAgent,
+        }));
+        return {
+            twoFactorEnabled,
+            sessions: sess.items,
+            events,
+        };
+    }
+
+    /* ------------------------- WebAuthn (stubs) ------------------------- */
+    async webauthnCreateOptions(userId: string, email: string) {
+        return {
+            rp: { name: "RemoteIQ" },
+            user: {
+                id: Buffer.from(userId),
+                name: email,
+                displayName: email,
+            },
+            challenge: Buffer.from(this.randomToken(), "utf8").toString("base64url"),
+            pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+            timeout: 60000,
+            attestation: "none",
+        } as any;
+    }
+
+    async webauthnFinish(_userId: string, _body: any) {
+        return {
+            id: "cred_" + this.randomToken().slice(0, 8),
+            label: "Passkey",
+            createdAt: new Date().toISOString(),
+        };
+    }
+
+    async deleteWebAuthn(_userId: string, _id: string) {
+        return { ok: true };
+    }
+}
+
+########## END FILE:   src\users\security.service.ts ##########
+
+########## BEGIN FILE: src\users\users.controller.ts ##########
+//backend\src\users\users.controller.ts
+
+import {
+    Body,
+    Controller,
+    Delete,
+    Get,
+    HttpCode,
+    Param,
+    Patch,
+    Post,
+    Query,
+    UsePipes,
+    ValidationPipe,
+} from "@nestjs/common";
+import {
+    BulkInviteDto,
+    CreateUserDto,
+    IdParam,
+    InviteUserDto,
+    ListUsersQuery,
+    ResetPasswordDto,
+    SuspendDto,
+    UpdateRoleDto,
+    UpdateUserDto,
+} from "./users.dto";
+import { UsersService } from "./users.service";
+
+
+@UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+@Controller("/api/admin/users")
+export class UsersController {
+    constructor(private readonly svc: UsersService) { }
+
+    @Get()
+    async list(@Query() q: ListUsersQuery) {
+        return this.svc.list(q);
+    }
+
+    @Get("roles")
+    async roles() {
+        return this.svc.roles();
+    }
+
+    @Post("invite")
+    async invite(@Body() body: InviteUserDto) {
+        return this.svc.inviteOne(body);
+    }
+
+    @Post("invite/bulk")
+    async inviteBulk(@Body() body: BulkInviteDto) {
+        return this.svc.inviteBulk(body);
+    }
+
+    @Post("create")
+    async create(@Body() body: CreateUserDto) {
+        return this.svc.createOne(body);
+    }
+
+    @Patch(":id/role")
+    @HttpCode(204)
+    async updateRole(@Param() p: IdParam, @Body() body: UpdateRoleDto) {
+        await this.svc.updateRole(p.id, body);
+    }
+
+    @Patch(":id")
+    @HttpCode(204)
+    async updateUser(@Param() p: IdParam, @Body() body: UpdateUserDto) {
+        await this.svc.updateUser(p.id, body);
+    }
+
+    // Preferred method
+    @Patch(":id/password")
+    @HttpCode(204)
+    async resetPasswordPatch(@Param() p: IdParam, @Body() body: ResetPasswordDto) {
+        await this.svc.setPassword(p.id, body);
+    }
+
+    // Alias to support UIs that POST to the same endpoint
+    @Post(":id/password")
+    @HttpCode(204)
+    async resetPasswordPost(@Param() p: IdParam, @Body() body: ResetPasswordDto) {
+        await this.svc.setPassword(p.id, body);
+    }
+
+    @Post(":id/reset-2fa")
+    @HttpCode(204)
+    async reset2fa(@Param() p: IdParam) {
+        await this.svc.reset2fa(p.id);
+    }
+
+    @Post(":id/suspend")
+    @HttpCode(204)
+    async suspend(@Param() p: IdParam, @Body() body: SuspendDto) {
+        await this.svc.setSuspended(p.id, body.suspended);
+    }
+
+    @Delete(":id")
+    @HttpCode(204)
+    async remove(@Param() p: IdParam) {
+        await this.svc.remove(p.id);
+    }
+}
+
+########## END FILE:   src\users\users.controller.ts ##########
+
+########## BEGIN FILE: src\users\users.service.ts ##########
+// backend/src/users/users.service.ts
+import { Injectable, NotFoundException } from "@nestjs/common";
+import { PgPoolService } from "../storage/pg-pool.service";
+import {
+    BulkInviteDto,
+    CreateUserDto,
+    InviteUserDto,
+    ListUsersQuery,
+    ResetPasswordDto,
+    UpdateRoleDto,
+    UpdateUserDto,
+    UserRow,
+} from "./users.dto";
+import * as bcrypt from "bcryptjs";
+
+function mapUserRow(r: any): UserRow {
+    return {
+        id: r.id,
+        name: r.name,
+        email: r.email,
+        role: r.role,
+        status: r.status,
+        twoFactorEnabled: r.two_factor_enabled,
+        lastSeen: r.last_seen ? new Date(r.last_seen).toISOString() : null,
+        createdAt: new Date(r.created_at).toISOString(),
+        updatedAt: new Date(r.updated_at).toISOString(),
+
+        // Profile fields (nullable)
+        phone: r.phone ?? null,
+        address1: r.address1 ?? null,
+        address2: r.address2 ?? null,
+        city: r.city ?? null,
+        state: r.state ?? null,
+        postal: r.postal ?? null,
+        country: r.country ?? null,
+
+        // Avatars (nullable)
+        avatarUrl: r.avatar_url ?? null,
+        avatarThumbUrl: r.avatar_thumb_url ?? null,
+    };
+}
+
+const SALT_ROUNDS = 12;
+
+@Injectable()
+export class UsersService {
+    // removed cache; always read schema live so runtime migrations are seen
+    constructor(private readonly pg: PgPoolService) { }
+
+    private async getUserColumns(): Promise<Set<string>> {
+        const { rows } = await this.pg.query(
+            `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'users'
+    `
+        );
+        return new Set(rows.map((r: any) => r.column_name));
+    }
+
+    async list(q: ListUsersQuery): Promise<{ items: UserRow[]; total: number }> {
+        const params: any[] = [];
+        const where: string[] = [];
+
+        if (q.q) {
+            params.push(`%${q.q.toLowerCase()}%`);
+            where.push(
+                `(LOWER(name) LIKE $${params.length} OR LOWER(email) LIKE $${params.length})`
+            );
+        }
+        if (q.role && q.role !== "all") {
+            params.push(q.role);
+            where.push(`role = $${params.length}`);
+        }
+        if (q.status && q.status !== "all") {
+            params.push(q.status);
+            where.push(`status = $${params.length}`);
+        }
+        const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+        const sortKeyMap: Record<string, string> = {
+            name: "name",
+            email: "email",
+            role: "role",
+            lastSeen: "last_seen",
+        };
+        const sortCol = sortKeyMap[q.sortKey] ?? "name";
+        const sortDir = q.sortDir?.toUpperCase() === "DESC" ? "DESC" : "ASC";
+
+        const page = Math.max(1, q.page ?? 1);
+        const pageSize = Math.max(1, q.pageSize ?? 25);
+        const offset = (page - 1) * pageSize;
+
+        const countSql = `SELECT COUNT(*) AS c FROM users ${whereSql}`;
+        const { rows: countRows } = await this.pg.query(countSql, params);
+        const total = Number(countRows[0]?.c ?? 0);
+
+        const dataSql = `
+      SELECT
+        id,
+        name,
+        email,
+        role,
+        status,
+        two_factor_enabled,
+        last_seen,
+        created_at,
+        updated_at,
+
+        -- profile fields
+        phone,
+        address1,
+        address2,
+        city,
+        state,
+        postal,
+        country,
+
+        -- avatar fields
+        avatar_url,
+        avatar_thumb_url
+
+      FROM users
+      ${whereSql}
+      ORDER BY ${sortCol} ${sortDir}, name ASC
+      LIMIT $${params.length + 1}
+      OFFSET $${params.length + 2}
+    `;
+        const { rows } = await this.pg.query(dataSql, [...params, pageSize, offset]);
+        return { items: rows.map(mapUserRow), total };
+    }
+
+    async roles(): Promise<{ id: string; name: string }[]> {
+        const { rows } = await this.pg.query(
+            `SELECT id, name FROM roles ORDER BY name ASC`
+        );
+        return rows;
+    }
+
+    async inviteOne(dto: InviteUserDto): Promise<{ id: string }> {
+        const name = dto.name?.trim() || dto.email.split("@")[0];
+        const role = dto.role?.trim() || "User";
+        const { rows } = await this.pg.query(
+            `INSERT INTO users (name, email, role, status)
+       VALUES ($1, $2, $3, 'invited')
+       ON CONFLICT (email) DO UPDATE SET
+         name = EXCLUDED.name,
+         role = EXCLUDED.role
+       RETURNING id`,
+            [name, dto.email, role]
+        );
+        return { id: rows[0]?.id ?? "" };
+    }
+
+    async inviteBulk(dto: BulkInviteDto): Promise<{ created: number }> {
+        let created = 0;
+        for (const inv of dto.invites || []) {
+            const res = await this.inviteOne(inv);
+            if (res.id) created++;
+        }
+        return { created };
+    }
+
+    async updateRole(id: string, dto: UpdateRoleDto): Promise<void> {
+        const { rows } = await this.pg.query(
+            `UPDATE users SET role = $2, updated_at = NOW() WHERE id = $1 RETURNING id`,
+            [id, dto.role]
+        );
+        if (rows.length === 0) throw new NotFoundException("User not found");
+    }
+
+    async setSuspended(id: string, suspended: boolean): Promise<void> {
+        const status = suspended ? "suspended" : "active";
+        const { rows } = await this.pg.query(
+            `UPDATE users SET status = $2, updated_at = NOW() WHERE id = $1 RETURNING id`,
+            [id, status]
+        );
+        if (rows.length === 0) throw new NotFoundException("User not found");
+    }
+
+    async reset2fa(id: string): Promise<void> {
+        const { rows } = await this.pg.query(
+            `UPDATE users SET two_factor_enabled = FALSE, updated_at = NOW() WHERE id = $1 RETURNING id`,
+            [id]
+        );
+        if (rows.length === 0) throw new NotFoundException("User not found");
+    }
+
+    async remove(id: string): Promise<void> {
+        const { rows } = await this.pg.query(
+            `DELETE FROM users WHERE id = $1 RETURNING id`,
+            [id]
+        );
+        if (rows.length === 0) throw new NotFoundException("User not found");
+    }
+
+    async createOne(dto: CreateUserDto): Promise<{ id: string }> {
+        const name = dto.name.trim();
+        const email = dto.email.toLowerCase().trim();
+        const role = (dto.role?.trim() || "User") as string;
+        const status = dto.status ?? "active";
+
+        const hash = await bcrypt.hash(dto.password, SALT_ROUNDS);
+
+        const { rows } = await this.pg.query(
+            `INSERT INTO users (name, email, role, status, password_hash, password_updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (email) DO UPDATE SET
+         name = EXCLUDED.name,
+         role = EXCLUDED.role,
+         status = EXCLUDED.status,
+         password_hash = EXCLUDED.password_hash,
+         password_updated_at = EXCLUDED.password_updated_at
+       RETURNING id`,
+            [name, email, role, status, hash]
+        );
+
+        return { id: rows[0]?.id ?? "" };
+    }
+
+    async setPassword(id: string, body: ResetPasswordDto): Promise<void> {
+        const hash = await bcrypt.hash(body.password, SALT_ROUNDS);
+        const { rows } = await this.pg.query(
+            `UPDATE users
+         SET password_hash = $2,
+             password_updated_at = NOW(),
+             updated_at = NOW()
+       WHERE id = $1
+       RETURNING id`,
+            [id, hash]
+        );
+        if (rows.length === 0) throw new NotFoundException("User not found");
+    }
+
+    async updateUser(id: string, dto: UpdateUserDto): Promise<void> {
+        const cols = await this.getUserColumns();
+
+        const fieldMap: Record<string, string> = {
+            name: "name",
+            email: "email",
+            role: "role",
+            phone: "phone",
+            address1: "address1",
+            address2: "address2",
+            city: "city",
+            state: "state",
+            postal: "postal",
+            country: "country",
+            // if you decide to allow admin to change avatars here, you could include:
+            // avatarUrl: "avatar_url",
+            // avatarThumbUrl: "avatar_thumb_url",
+        };
+
+        const sets: string[] = [];
+        const params: any[] = [id];
+
+        Object.entries(dto).forEach(([k, v]) => {
+            const col = fieldMap[k];
+            if (v !== undefined && col && cols.has(col)) {
+                params.push(v);
+                sets.push(`${col} = $${params.length}`);
+            }
+        });
+
+        if (sets.length === 0) {
+            const { rows } = await this.pg.query(`SELECT id FROM users WHERE id = $1`, [id]);
+            if (rows.length === 0) throw new NotFoundException("User not found");
+            return;
+        }
+
+        const sql = `
+      UPDATE users
+      SET ${sets.join(", ")}, updated_at = NOW()
+      WHERE id = $1
+      RETURNING id
+    `;
+        const { rows } = await this.pg.query(sql, params);
+        if (rows.length === 0) throw new NotFoundException("User not found");
+    }
+}
+
+########## END FILE:   src\users\users.service.ts ##########
+
+########## BEGIN FILE: users_schema_fix.sql ##########
+CREATE OR REPLACE FUNCTION set_users_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $func$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END
+$func$;
+
+DROP TRIGGER IF EXISTS trg_users_updated_at ON users;
+
+CREATE TRIGGER trg_users_updated_at
+BEFORE UPDATE ON users
+FOR EACH ROW
+EXECUTE FUNCTION set_users_updated_at();
+
+########## END FILE:   users_schema_fix.sql ##########
+
+########## BEGIN FILE: users-schema.sql ##########
+BEGIN;
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Roles
+CREATE TABLE IF NOT EXISTS roles (
+  id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL UNIQUE
+);
+INSERT INTO roles (name) VALUES ('Admin') ON CONFLICT DO NOTHING;
+INSERT INTO roles (name) VALUES ('User')  ON CONFLICT DO NOTHING;
+
+-- Users
+CREATE TABLE IF NOT EXISTS users (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name                text        NOT NULL,
+  email               text        NOT NULL UNIQUE,
+  role                text        NOT NULL DEFAULT 'User',
+  status              text        NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','invited')),
+  two_factor_enabled  boolean     NOT NULL DEFAULT false,
+  last_seen           timestamptz NULL,
+  password_hash       text        NULL,
+  password_updated_at timestamptz NULL,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS role                text        NOT NULL DEFAULT 'User',
+  ADD COLUMN IF NOT EXISTS status              text        NOT NULL DEFAULT 'active',
+  ADD COLUMN IF NOT EXISTS two_factor_enabled  boolean     NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS last_seen           timestamptz NULL,
+  ADD COLUMN IF NOT EXISTS password_hash       text        NULL,
+  ADD COLUMN IF NOT EXISTS password_updated_at timestamptz NULL,
+  ADD COLUMN IF NOT EXISTS created_at          timestamptz NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at          timestamptz NOT NULL DEFAULT now();
+
+-- Use a named tag to avoid PowerShell mangling $$ into "$ $"
+DO $do$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'users_status_check'
+  ) THEN
+    EXECUTE
+      'ALTER TABLE users
+         ADD CONSTRAINT users_status_check
+         CHECK (status IN (''active'',''suspended'',''invited''))';
+  END IF;
+END
+$do$;
+
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS users_set_updated_at ON users;
+CREATE TRIGGER users_set_updated_at
+BEFORE UPDATE ON users
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_users_role        ON users (role);
+CREATE INDEX IF NOT EXISTS idx_users_status      ON users (status);
+CREATE INDEX IF NOT EXISTS idx_users_lower_email ON users ((lower(email)));
+CREATE INDEX IF NOT EXISTS idx_users_lower_name  ON users ((lower(name)));
+
+COMMIT;
+
+########## END FILE:   users-schema.sql ##########
+
+========== SUMMARY ==========
+Generated: 2025-10-21 13:29:13
+RepoRoot : C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V3 - Copy\remoteiq-minimal-e2e\backend
+Mode     : STRICT (no fallbacks)
+
+All listed files were included.

@@ -1,0 +1,213 @@
+backend
+├── config
+│   └── database.json
+├── migrations
+│   ├── 001_users_passwords.sql
+│   ├── 20251019_keep_current_model.sql
+│   ├── 20251019_roles_companion_meta.sql
+│   ├── 20251020_imap_ingest.sql
+│   ├── XXXX_add_users_roles.sql
+│   ├── XXXX_create_localization.sql
+│   ├── XXXX_create_support_legal.sql
+│   ├── XXXX_roles_enhancements.sql
+│   └── XXXX_users_harden_ids.sql
+├── prisma
+│   ├── migrations
+│   │   ├── 20251015193705_init
+│   │   │   └── migration.sql
+│   │   ├── 20251016021446_make_token_hash_unique
+│   │   │   └── migration.sql
+│   │   ├── 20251016022130_add_tokenhash_unique
+│   │   │   └── migration.sql
+│   │   ├── 20251016032227_device_id_unique
+│   │   │   └── migration.sql
+│   │   └── migration_lock.toml
+│   ├── dev.db
+│   └── schema.prisma
+├── public
+│   └── uploads
+│       ├── 1760831401666_logo.png
+│       ├── 1760840146567_logo.ico
+│       ├── 1761017229710_avatar.png
+│       ├── 1761017733451_avatar.png
+│       └── avatar-placeholder.png
+├── src
+│   ├── admin
+│   │   ├── dto
+│   │   │   └── database.dto.ts
+│   │   ├── admin.module.ts
+│   │   ├── database.controller.ts
+│   │   ├── database.dto.ts
+│   │   └── database.service.ts
+│   ├── agents
+│   │   ├── dto
+│   │   │   └── enroll-agent.dto.ts
+│   │   ├── agents.controller.ts
+│   │   └── agents.module.ts
+│   ├── auth
+│   │   ├── dto
+│   │   │   └── login.dto.ts
+│   │   ├── auth-cookie.guard.ts
+│   │   ├── auth-cookie.middleware.ts
+│   │   ├── auth.controller.ts
+│   │   ├── auth.module.ts
+│   │   ├── auth.service.ts
+│   │   ├── user-auth.controller.ts
+│   │   └── user-auth.service.ts
+│   ├── automation
+│   │   └── automation.controller.ts
+│   ├── branding
+│   │   ├── dto
+│   │   │   └── update-branding.dto.ts
+│   │   ├── branding.controller.ts
+│   │   ├── branding.module.ts
+│   │   └── branding.service.ts
+│   ├── common
+│   │   ├── guards
+│   │   │   └── admin-api.guard.ts
+│   │   ├── admin-api.guard.ts
+│   │   ├── agent-token.util.ts
+│   │   ├── auth-cookie.middleware.ts
+│   │   ├── common.module.ts
+│   │   ├── health.controller.ts
+│   │   ├── online.util.ts
+│   │   ├── pagination.ts
+│   │   ├── prisma.service.ts
+│   │   ├── socket-registry.service.ts
+│   │   └── types.ts
+│   ├── company
+│   │   ├── company.controller.ts
+│   │   ├── company.dto.ts
+│   │   ├── company.module.ts
+│   │   └── company.service.ts
+│   ├── database
+│   │   ├── database.module.ts
+│   │   └── prisma.service.ts
+│   ├── devices
+│   │   ├── dto
+│   │   │   └── list-devices.dto.ts
+│   │   ├── device-actions.controller.ts
+│   │   ├── device-insights.controller.ts
+│   │   ├── devices.controller.ts
+│   │   ├── devices.module.ts
+│   │   ├── devices.service.ts
+│   │   └── dto.ts
+│   ├── health
+│   │   ├── email.health.controller.ts
+│   │   ├── health.controller.ts
+│   │   └── health.module.ts
+│   ├── imap
+│   │   ├── imap-ingest.repository.ts
+│   │   ├── imap-poller.module.ts
+│   │   ├── imap-poller.service.ts
+│   │   ├── imap-state.repository.ts
+│   │   ├── imap.module.ts
+│   │   └── inbound-router.service.ts
+│   ├── jobs
+│   │   ├── dispatcher.service.ts
+│   │   ├── jobs.controller.ts
+│   │   ├── jobs.module.ts
+│   │   ├── jobs.service.ts
+│   │   ├── runs.controller.ts
+│   │   └── runs.service.ts
+│   ├── localization
+│   │   ├── localization.controller.ts
+│   │   ├── localization.dto.ts
+│   │   ├── localization.module.ts
+│   │   └── localization.service.ts
+│   ├── prisma
+│   │   ├── prisma.module.ts
+│   │   └── prisma.service.ts
+│   ├── realtime
+│   │   └── ws.gateway.ts
+│   ├── roles
+│   │   ├── dto
+│   │   │   ├── create-role.dto.ts
+│   │   │   ├── index.ts
+│   │   │   └── update-role.dto.ts
+│   │   ├── roles.controller.ts
+│   │   ├── roles.dto.ts
+│   │   ├── roles.module.ts
+│   │   └── roles.service.ts
+│   ├── smtp
+│   │   ├── dto
+│   │   │   ├── dkim.dto.ts
+│   │   │   └── smtp.dto.ts
+│   │   ├── dkim.repository.ts
+│   │   ├── smtp.controller.ts
+│   │   ├── smtp.module.ts
+│   │   ├── smtp.repository.ts
+│   │   ├── smtp.service.ts
+│   │   └── smtp.storage.ts
+│   ├── storage
+│   │   ├── pg-pool.service.ts
+│   │   ├── pg.bootstrap.ts
+│   │   └── storage.module.ts
+│   ├── support
+│   │   ├── support.controller.ts
+│   │   ├── support.dto.ts
+│   │   ├── support.module.ts
+│   │   └── support.service.ts
+│   ├── support-legal
+│   │   ├── support-legal.controller.ts
+│   │   ├── support-legal.dto.ts
+│   │   ├── support-legal.module.ts
+│   │   └── support-legal.service.ts
+│   ├── types
+│   │   ├── express.d.ts
+│   │   └── externals.d.ts
+│   ├── users
+│   │   ├── me.controller.ts
+│   │   ├── me.dto.ts
+│   │   ├── me.service.ts
+│   │   ├── security.controller.ts
+│   │   ├── security.service.ts
+│   │   ├── users.controller.ts
+│   │   ├── users.dto.ts
+│   │   ├── users.module.ts
+│   │   └── users.service.ts
+│   ├── ws
+│   │   ├── agent.gateway.ts
+│   │   ├── ws.gateway.ts
+│   │   └── ws.module.ts
+│   ├── app.module.ts
+│   ├── main.swagger.example.ts
+│   ├── main.ts
+│   └── users.zip
+├── tools
+│   └── remoteiq-sanity.ps1
+├── .env
+├── .env.example
+├── app.module.patch.txt
+├── Apply-CompanyProfileSchema.ps1
+├── Apply-LocalizationSchema.ps1
+├── Apply-Migration.ps1
+├── Apply-SupportLegalSchema.ps1
+├── Apply-UsersSchema.ps1
+├── Apply-UUID.ps1
+├── backend.zip
+├── cookies.txt
+├── db-inspect.txt
+├── docker-compose.db.yml
+├── HOWTO.md
+├── Inspect-PostgresSchema.ps1
+├── migrate-users-schema.ps1
+├── nest-cli.json
+├── package.json
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml
+├── postman_collection.json
+├── README.md
+├── remoteiq-2fa-recovery-codes.txt
+├── remoteiq-2fa.png
+├── security-tools.ps1
+├── support_legal.sql
+├── test-api.ps1
+├── test-roles.ps1
+├── test-smtp.ps1
+├── tsconfig.build.json
+├── tsconfig.json
+├── users_schema_fix.sql
+├── users-schema.sql
+├── Write-ProjectTree.ps1
+└── ws.gateway.patch.txt

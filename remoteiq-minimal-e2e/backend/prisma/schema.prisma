@@ -1,0 +1,53 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Agent {
+  id              String   @id @default(uuid())
+  deviceId        String   @unique
+  hostname        String
+  os              String
+  arch            String
+  lastHeartbeatAt DateTime?
+  version         String
+  enrolledAt      DateTime @default(now())
+  tokenHash       String   @unique
+
+  jobs Job[]
+}
+
+model Job {
+  id           String   @id @default(uuid())
+  agentId      String
+  type         String
+  payload      String   // JSON string (SQLite-safe)
+  status       String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  dispatchedAt DateTime?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+
+  agent  Agent   @relation(fields: [agentId], references: [id])
+  result JobResult?
+
+  @@index([agentId])
+  @@index([status])
+}
+
+model JobResult {
+  id         String   @id @default(uuid())
+  jobId      String   @unique
+  exitCode   Int
+  stdout     String
+  stderr     String
+  durationMs Int
+  createdAt  DateTime @default(now())
+
+  job Job @relation(fields: [jobId], references: [id])
+}

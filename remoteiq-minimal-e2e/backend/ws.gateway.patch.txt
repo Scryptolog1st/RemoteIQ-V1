@@ -1,0 +1,10 @@
+// src/ws/agent.gateway.ts — to align with spec using `/ws`
+// @WebSocketGateway({ path: '/ws/agent' })
+// export class AgentGateway { ... }
+//
+// Change to:
+//
+// @WebSocketGateway({ path: '/ws' })
+// export class AgentGateway { ... }
+//
+// (Frontend can still use topic types inside the messages.)

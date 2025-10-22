@@ -1,0 +1,24 @@
+{
+  "enabled": true,
+  "engine": "postgresql",
+  "authMode": "url",
+  "url": "postgres://remoteiq:remoteiqpass@localhost:5432/remoteiq",
+  "host": "",
+  "port": 5432,
+  "dbName": "",
+  "username": "",
+  "password": "",
+  "ssl": false,
+  "poolMin": 0,
+  "poolMax": 10,
+  "readReplicas": "",
+  "mappings": {
+    "users": "users",
+    "roles": "roles",
+    "sessions": "sessions",
+    "audit_logs": "audit_logs",
+    "devices": "devices",
+    "policies": "policies",
+    "email_queue": "email_queue"
+  }
+}

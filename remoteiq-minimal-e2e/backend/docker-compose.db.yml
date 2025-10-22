@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: remoteiq
+      POSTGRES_PASSWORD: remoteiqpass
+      POSTGRES_DB: remoteiq
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - remoteiq-net
+
+  pgadmin:
+    image: dpage/pgadmin4:latest      # pulls the newest pgAdmin tag
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin  # persist pgAdmin config/servers.json
+    networks:
+      - remoteiq-net
+
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --cleanup --interval 3600
+    # no ports or networks required
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+
+networks:
+  remoteiq-net:
+    name: remoteiq-net

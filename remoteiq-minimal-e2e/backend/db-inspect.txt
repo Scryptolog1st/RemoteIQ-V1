@@ -1,0 +1,352 @@
+ table_schema |       table_name       
+--------------+------------------------
+ public       | branding_settings
+ public       | company_profile
+ public       | devices
+ public       | dkim_keys
+ public       | dkim_settings
+ public       | email_inbound_events
+ public       | email_settings
+ public       | imap_ingested
+ public       | imap_state
+ public       | localization_settings
+ public       | role_meta
+ public       | roles
+ public       | support_legal
+ public       | support_legal_settings
+ public       | users
+(15 rows)
+
+ table_schema |       table_name       | ordinal_position |        column_name        |        data_type         | is_nullable |                  column_default                  
+--------------+------------------------+------------------+---------------------------+--------------------------+-------------+--------------------------------------------------
+ public       | branding_settings      |                1 | id                        | integer                  | NO          | 
+ public       | branding_settings      |                2 | primary_color             | text                     | YES         | 
+ public       | branding_settings      |                3 | secondary_color           | text                     | YES         | 
+ public       | branding_settings      |                4 | logo_light_url            | text                     | YES         | 
+ public       | branding_settings      |                5 | logo_dark_url             | text                     | YES         | 
+ public       | branding_settings      |                6 | login_background_url      | text                     | YES         | 
+ public       | branding_settings      |                7 | email_header              | text                     | YES         | 
+ public       | branding_settings      |                8 | email_footer              | text                     | YES         | 
+ public       | branding_settings      |                9 | custom_css                | text                     | YES         | 
+ public       | branding_settings      |               10 | allow_client_theme_toggle | boolean                  | YES         | 
+ public       | branding_settings      |               11 | created_at                | timestamp with time zone | YES         | now()
+ public       | branding_settings      |               12 | updated_at                | timestamp with time zone | YES         | now()
+ public       | branding_settings      |               13 | favicon_url               | text                     | YES         | 
+ public       | company_profile        |                1 | id                        | smallint                 | NO          | 1
+ public       | company_profile        |                2 | name                      | text                     | NO          | 
+ public       | company_profile        |                3 | legal_name                | text                     | YES         | 
+ public       | company_profile        |                4 | email                     | text                     | YES         | 
+ public       | company_profile        |                5 | phone                     | text                     | YES         | 
+ public       | company_profile        |                6 | fax                       | text                     | YES         | 
+ public       | company_profile        |                7 | website                   | text                     | YES         | 
+ public       | company_profile        |                8 | vat_tin                   | text                     | YES         | 
+ public       | company_profile        |                9 | address1                  | text                     | YES         | 
+ public       | company_profile        |               10 | address2                  | text                     | YES         | 
+ public       | company_profile        |               11 | city                      | text                     | YES         | 
+ public       | company_profile        |               12 | state                     | text                     | YES         | 
+ public       | company_profile        |               13 | postal                    | text                     | YES         | 
+ public       | company_profile        |               14 | country                   | text                     | YES         | 
+ public       | devices                |                1 | id                        | uuid                     | NO          | 
+ public       | devices                |                2 | hostname                  | text                     | NO          | 
+ public       | devices                |                3 | os                        | text                     | NO          | 
+ public       | devices                |                4 | arch                      | text                     | YES         | 
+ public       | devices                |                5 | last_seen                 | timestamp with time zone | YES         | 
+ public       | devices                |                6 | status                    | text                     | NO          | 
+ public       | devices                |                7 | client                    | text                     | YES         | 
+ public       | devices                |                8 | site                      | text                     | YES         | 
+ public       | devices                |                9 | user                      | text                     | YES         | 
+ public       | dkim_keys              |                1 | id                        | integer                  | NO          | nextval('dkim_keys_id_seq'::regclass)
+ public       | dkim_keys              |                2 | domain                    | text                     | NO          | 
+ public       | dkim_keys              |                3 | selector                  | text                     | NO          | 
+ public       | dkim_keys              |                4 | private_key               | text                     | NO          | 
+ public       | dkim_keys              |                5 | created_at                | timestamp with time zone | NO          | now()
+ public       | dkim_keys              |                6 | updated_at                | timestamp with time zone | NO          | now()
+ public       | dkim_settings          |                1 | id                        | smallint                 | NO          | 1
+ public       | dkim_settings          |                2 | domain                    | text                     | NO          | ''::text
+ public       | dkim_settings          |                3 | selector                  | text                     | NO          | ''::text
+ public       | dkim_settings          |                4 | private_key               | text                     | YES         | 
+ public       | dkim_settings          |                5 | updated_at                | timestamp with time zone | NO          | now()
+ public       | email_inbound_events   |                1 | id                        | bigint                   | NO          | nextval('email_inbound_events_id_seq'::regclass)
+ public       | email_inbound_events   |                2 | purpose                   | text                     | NO          | 
+ public       | email_inbound_events   |                3 | from_addr                 | text                     | YES         | 
+ public       | email_inbound_events   |                4 | subject                   | text                     | YES         | 
+ public       | email_inbound_events   |                5 | kind                      | text                     | YES         | 
+ public       | email_inbound_events   |                6 | raw                       | bytea                    | YES         | 
+ public       | email_inbound_events   |                7 | created_at                | timestamp with time zone | NO          | now()
+ public       | email_settings         |                1 | purpose                   | USER-DEFINED             | NO          | 
+ public       | email_settings         |                2 | enabled                   | boolean                  | NO          | true
+ public       | email_settings         |                3 | smtp_host                 | text                     | NO          | ''::text
+ public       | email_settings         |                4 | smtp_port                 | integer                  | YES         | 
+ public       | email_settings         |                5 | smtp_username             | text                     | NO          | ''::text
+ public       | email_settings         |                6 | smtp_password             | text                     | YES         | 
+ public       | email_settings         |                7 | smtp_use_tls              | boolean                  | NO          | true
+ public       | email_settings         |                8 | smtp_use_ssl              | boolean                  | NO          | false
+ public       | email_settings         |                9 | smtp_from_address         | text                     | NO          | ''::text
+ public       | email_settings         |               10 | imap_host                 | text                     | NO          | ''::text
+ public       | email_settings         |               11 | imap_port                 | integer                  | YES         | 
+ public       | email_settings         |               12 | imap_username             | text                     | NO          | ''::text
+ public       | email_settings         |               13 | imap_password             | text                     | YES         | 
+ public       | email_settings         |               14 | imap_use_ssl              | boolean                  | NO          | true
+ public       | email_settings         |               15 | pop_host                  | text                     | NO          | ''::text
+ public       | email_settings         |               16 | pop_port                  | integer                  | YES         | 
+ public       | email_settings         |               17 | pop_username              | text                     | NO          | ''::text
+ public       | email_settings         |               18 | pop_password              | text                     | YES         | 
+ public       | email_settings         |               19 | pop_use_ssl               | boolean                  | NO          | true
+ public       | email_settings         |               20 | updated_at                | timestamp with time zone | NO          | now()
+ public       | imap_ingested          |                1 | id                        | bigint                   | NO          | nextval('imap_ingested_id_seq'::regclass)
+ public       | imap_ingested          |                2 | purpose                   | text                     | NO          | 
+ public       | imap_ingested          |                3 | uid                       | bigint                   | NO          | 
+ public       | imap_ingested          |                4 | from_addr                 | text                     | YES         | 
+ public       | imap_ingested          |                5 | subject                   | text                     | YES         | 
+ public       | imap_ingested          |                6 | size_bytes                | integer                  | YES         | 
+ public       | imap_ingested          |                7 | headers_snippet           | text                     | YES         | 
+ public       | imap_ingested          |                8 | is_bounce                 | boolean                  | NO          | false
+ public       | imap_ingested          |                9 | bounce_recipient          | text                     | YES         | 
+ public       | imap_ingested          |               10 | bounce_status             | text                     | YES         | 
+ public       | imap_ingested          |               11 | bounce_action             | text                     | YES         | 
+ public       | imap_ingested          |               12 | bounce_diagnostic         | text                     | YES         | 
+ public       | imap_ingested          |               13 | created_at                | timestamp with time zone | NO          | now()
+ public       | imap_state             |                1 | purpose                   | text                     | NO          | 
+ public       | imap_state             |                2 | last_uid                  | bigint                   | NO          | 0
+ public       | imap_state             |                3 | updated_at                | timestamp with time zone | NO          | now()
+ public       | localization_settings  |                1 | id                        | integer                  | NO          | 
+ public       | localization_settings  |                2 | language                  | text                     | NO          | 'en-US'::text
+ public       | localization_settings  |                3 | date_format               | text                     | NO          | 'MM/DD/YYYY'::text
+ public       | localization_settings  |                4 | time_format               | text                     | NO          | 'h:mm a'::text
+ public       | localization_settings  |                5 | number_format             | text                     | NO          | '1,234.56'::text
+ public       | localization_settings  |                6 | time_zone                 | text                     | NO          | 'UTC'::text
+ public       | localization_settings  |                7 | first_day_of_week         | text                     | NO          | 'sunday'::text
+ public       | localization_settings  |                8 | currency                  | text                     | YES         | 
+ public       | role_meta              |                1 | role_name                 | text                     | NO          | 
+ public       | role_meta              |                2 | description               | text                     | YES         | 
+ public       | role_meta              |                3 | permissions               | ARRAY                    | NO          | '{}'::text[]
+ public       | role_meta              |                4 | updated_at                | timestamp with time zone | NO          | now()
+ public       | roles                  |                1 | id                        | uuid                     | NO          | gen_random_uuid()
+ public       | roles                  |                2 | name                      | text                     | NO          | 
+ public       | roles                  |                3 | created_at                | timestamp with time zone | NO          | now()
+ public       | roles_with_meta        |                1 | id                        | uuid                     | YES         | 
+ public       | roles_with_meta        |                2 | name                      | text                     | YES         | 
+ public       | roles_with_meta        |                3 | description               | text                     | YES         | 
+ public       | roles_with_meta        |                4 | permissions               | ARRAY                    | YES         | 
+ public       | roles_with_meta        |                5 | updated_at                | timestamp with time zone | YES         | 
+ public       | roles_with_meta        |                6 | created_at                | timestamp with time zone | YES         | 
+ public       | roles_with_meta        |                7 | users_count               | integer                  | YES         | 
+ public       | support_legal          |                1 | id                        | integer                  | NO          | 
+ public       | support_legal          |                2 | support_email             | text                     | YES         | 
+ public       | support_legal          |                3 | support_phone             | text                     | YES         | 
+ public       | support_legal          |                4 | knowledge_base_url        | text                     | YES         | 
+ public       | support_legal          |                5 | status_page_url           | text                     | YES         | 
+ public       | support_legal          |                6 | privacy_policy_url        | text                     | YES         | 
+ public       | support_legal          |                7 | terms_url                 | text                     | YES         | 
+ public       | support_legal          |                8 | gdpr_contact_email        | text                     | YES         | 
+ public       | support_legal          |                9 | legal_address             | text                     | YES         | 
+ public       | support_legal          |               10 | ticket_portal_url         | text                     | YES         | 
+ public       | support_legal          |               11 | phone_hours               | text                     | YES         | 
+ public       | support_legal          |               12 | notes_html                | text                     | YES         | 
+ public       | support_legal_settings |                1 | id                        | integer                  | NO          | 
+ public       | support_legal_settings |                2 | support_email             | text                     | YES         | 
+ public       | support_legal_settings |                3 | support_phone             | text                     | YES         | 
+ public       | support_legal_settings |                4 | support_url               | text                     | YES         | 
+ public       | support_legal_settings |                5 | status_page_url           | text                     | YES         | 
+ public       | support_legal_settings |                6 | kb_url                    | text                     | YES         | 
+ public       | support_legal_settings |                7 | terms_url                 | text                     | YES         | 
+ public       | support_legal_settings |                8 | privacy_url               | text                     | YES         | 
+ public       | support_legal_settings |                9 | gdpr_contact              | text                     | YES         | 
+ public       | support_legal_settings |               10 | dmca_contact              | text                     | YES         | 
+ public       | support_legal_settings |               11 | show_chat_widget          | boolean                  | YES         | false
+ public       | support_legal_settings |               12 | chat_widget_code          | text                     | YES         | 
+ public       | support_legal_settings |               13 | updated_at                | timestamp with time zone | YES         | now()
+ public       | users                  |                1 | id                        | uuid                     | NO          | gen_random_uuid()
+ public       | users                  |                2 | name                      | text                     | NO          | 
+ public       | users                  |                3 | email                     | text                     | NO          | 
+ public       | users                  |                4 | role                      | text                     | NO          | 'User'::text
+ public       | users                  |                5 | two_factor_enabled        | boolean                  | NO          | false
+ public       | users                  |                6 | suspended                 | boolean                  | NO          | false
+ public       | users                  |                7 | status                    | text                     | NO          | 'active'::text
+ public       | users                  |                8 | last_seen                 | timestamp with time zone | YES         | 
+ public       | users                  |                9 | created_at                | timestamp with time zone | NO          | now()
+ public       | users                  |               10 | updated_at                | timestamp with time zone | NO          | now()
+ public       | users                  |               11 | password_hash             | text                     | YES         | 
+ public       | users                  |               12 | password_updated_at       | timestamp with time zone | YES         | 
+ public       | users                  |               13 | phone                     | text                     | YES         | 
+ public       | users                  |               14 | address1                  | text                     | YES         | 
+ public       | users                  |               15 | address2                  | text                     | YES         | 
+ public       | users                  |               16 | city                      | text                     | YES         | 
+ public       | users                  |               17 | state                     | text                     | YES         | 
+ public       | users                  |               18 | postal                    | text                     | YES         | 
+ public       | users                  |               19 | country                   | text                     | YES         | 
+ public       | users                  |               20 | timezone                  | text                     | YES         | 
+ public       | users                  |               21 | locale                    | text                     | YES         | 
+ public       | users                  |               22 | avatar_url                | text                     | YES         | 
+ public       | users                  |               23 | avatar_thumb_url          | text                     | YES         | 
+(160 rows)
+
+ schema |         table          |             index             |                                               indexdef                                               
+--------+------------------------+-------------------------------+------------------------------------------------------------------------------------------------------
+ public | branding_settings      | branding_settings_pkey        | CREATE UNIQUE INDEX branding_settings_pkey ON public.branding_settings USING btree (id)
+ public | company_profile        | company_profile_pkey          | CREATE UNIQUE INDEX company_profile_pkey ON public.company_profile USING btree (id)
+ public | devices                | devices_pkey                  | CREATE UNIQUE INDEX devices_pkey ON public.devices USING btree (id)
+ public | dkim_keys              | dkim_keys_domain_selector_key | CREATE UNIQUE INDEX dkim_keys_domain_selector_key ON public.dkim_keys USING btree (domain, selector)
+ public | dkim_keys              | dkim_keys_pkey                | CREATE UNIQUE INDEX dkim_keys_pkey ON public.dkim_keys USING btree (id)
+ public | dkim_settings          | dkim_settings_pkey            | CREATE UNIQUE INDEX dkim_settings_pkey ON public.dkim_settings USING btree (id)
+ public | email_inbound_events   | email_inbound_events_pkey     | CREATE UNIQUE INDEX email_inbound_events_pkey ON public.email_inbound_events USING btree (id)
+ public | email_settings         | email_settings_pkey           | CREATE UNIQUE INDEX email_settings_pkey ON public.email_settings USING btree (purpose)
+ public | imap_ingested          | imap_ingested_pkey            | CREATE UNIQUE INDEX imap_ingested_pkey ON public.imap_ingested USING btree (id)
+ public | imap_ingested          | imap_ingested_purpose_uid_key | CREATE UNIQUE INDEX imap_ingested_purpose_uid_key ON public.imap_ingested USING btree (purpose, uid)
+ public | imap_state             | imap_state_pkey               | CREATE UNIQUE INDEX imap_state_pkey ON public.imap_state USING btree (purpose)
+ public | localization_settings  | localization_settings_pkey    | CREATE UNIQUE INDEX localization_settings_pkey ON public.localization_settings USING btree (id)
+ public | role_meta              | idx_role_meta_lower_name      | CREATE INDEX idx_role_meta_lower_name ON public.role_meta USING btree (lower(role_name))
+ public | role_meta              | role_meta_pkey                | CREATE UNIQUE INDEX role_meta_pkey ON public.role_meta USING btree (role_name)
+ public | roles                  | roles_name_key                | CREATE UNIQUE INDEX roles_name_key ON public.roles USING btree (name)
+ public | roles                  | roles_pkey                    | CREATE UNIQUE INDEX roles_pkey ON public.roles USING btree (id)
+ public | support_legal          | support_legal_pkey            | CREATE UNIQUE INDEX support_legal_pkey ON public.support_legal USING btree (id)
+ public | support_legal_settings | support_legal_settings_pkey   | CREATE UNIQUE INDEX support_legal_settings_pkey ON public.support_legal_settings USING btree (id)
+ public | users                  | idx_users_email               | CREATE INDEX idx_users_email ON public.users USING btree (email)
+ public | users                  | idx_users_lower_email         | CREATE INDEX idx_users_lower_email ON public.users USING btree (lower(email))
+ public | users                  | idx_users_lower_name          | CREATE INDEX idx_users_lower_name ON public.users USING btree (lower(name))
+ public | users                  | idx_users_role                | CREATE INDEX idx_users_role ON public.users USING btree (role)
+ public | users                  | idx_users_status              | CREATE INDEX idx_users_status ON public.users USING btree (status)
+ public | users                  | users_email_key               | CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)
+ public | users                  | users_pkey                    | CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)
+(25 rows)
+
+ table_schema |       table_name       | constraint_type |        constraint_name        |     columns      
+--------------+------------------------+-----------------+-------------------------------+------------------
+ public       | branding_settings      | CHECK           | 2200_16405_1_not_null         | 
+ public       | branding_settings      | PRIMARY KEY     | branding_settings_pkey        | id
+ public       | company_profile        | CHECK           | 2200_16397_1_not_null         | 
+ public       | company_profile        | CHECK           | 2200_16397_2_not_null         | 
+ public       | company_profile        | PRIMARY KEY     | company_profile_pkey          | id
+ public       | devices                | CHECK           | 2200_16389_1_not_null         | 
+ public       | devices                | CHECK           | 2200_16389_2_not_null         | 
+ public       | devices                | CHECK           | 2200_16389_3_not_null         | 
+ public       | devices                | CHECK           | 2200_16389_6_not_null         | 
+ public       | devices                | CHECK           | devices_status_check          | 
+ public       | devices                | PRIMARY KEY     | devices_pkey                  | id
+ public       | dkim_keys              | CHECK           | 2200_16697_1_not_null         | 
+ public       | dkim_keys              | CHECK           | 2200_16697_2_not_null         | 
+ public       | dkim_keys              | CHECK           | 2200_16697_3_not_null         | 
+ public       | dkim_keys              | CHECK           | 2200_16697_4_not_null         | 
+ public       | dkim_keys              | CHECK           | 2200_16697_5_not_null         | 
+ public       | dkim_keys              | CHECK           | 2200_16697_6_not_null         | 
+ public       | dkim_keys              | PRIMARY KEY     | dkim_keys_pkey                | id
+ public       | dkim_keys              | UNIQUE          | dkim_keys_domain_selector_key | domain, selector
+ public       | dkim_settings          | CHECK           | 2200_16685_1_not_null         | 
+ public       | dkim_settings          | CHECK           | 2200_16685_2_not_null         | 
+ public       | dkim_settings          | CHECK           | 2200_16685_3_not_null         | 
+ public       | dkim_settings          | CHECK           | 2200_16685_5_not_null         | 
+ public       | dkim_settings          | PRIMARY KEY     | dkim_settings_pkey            | id
+ public       | email_inbound_events   | CHECK           | 2200_16710_1_not_null         | 
+ public       | email_inbound_events   | CHECK           | 2200_16710_2_not_null         | 
+ public       | email_inbound_events   | CHECK           | 2200_16710_7_not_null         | 
+ public       | email_inbound_events   | PRIMARY KEY     | email_inbound_events_pkey     | id
+ public       | email_settings         | CHECK           | 2200_16665_10_not_null        | 
+ public       | email_settings         | CHECK           | 2200_16665_12_not_null        | 
+ public       | email_settings         | CHECK           | 2200_16665_14_not_null        | 
+ public       | email_settings         | CHECK           | 2200_16665_15_not_null        | 
+ public       | email_settings         | CHECK           | 2200_16665_17_not_null        | 
+ public       | email_settings         | CHECK           | 2200_16665_19_not_null        | 
+ public       | email_settings         | CHECK           | 2200_16665_1_not_null         | 
+ public       | email_settings         | CHECK           | 2200_16665_20_not_null        | 
+ public       | email_settings         | CHECK           | 2200_16665_2_not_null         | 
+ public       | email_settings         | CHECK           | 2200_16665_3_not_null         | 
+ public       | email_settings         | CHECK           | 2200_16665_5_not_null         | 
+ public       | email_settings         | CHECK           | 2200_16665_7_not_null         | 
+ public       | email_settings         | CHECK           | 2200_16665_8_not_null         | 
+ public       | email_settings         | CHECK           | 2200_16665_9_not_null         | 
+ public       | email_settings         | PRIMARY KEY     | email_settings_pkey           | purpose
+ public       | imap_ingested          | CHECK           | 2200_16729_13_not_null        | 
+ public       | imap_ingested          | CHECK           | 2200_16729_1_not_null         | 
+ public       | imap_ingested          | CHECK           | 2200_16729_2_not_null         | 
+ public       | imap_ingested          | CHECK           | 2200_16729_3_not_null         | 
+ public       | imap_ingested          | CHECK           | 2200_16729_8_not_null         | 
+ public       | imap_ingested          | PRIMARY KEY     | imap_ingested_pkey            | id
+ public       | imap_ingested          | UNIQUE          | imap_ingested_purpose_uid_key | purpose, uid
+ public       | imap_state             | CHECK           | 2200_16719_1_not_null         | 
+ public       | imap_state             | CHECK           | 2200_16719_2_not_null         | 
+ public       | imap_state             | CHECK           | 2200_16719_3_not_null         | 
+ public       | imap_state             | PRIMARY KEY     | imap_state_pkey               | purpose
+ public       | localization_settings  | CHECK           | 2200_16416_1_not_null         | 
+ public       | localization_settings  | CHECK           | 2200_16416_2_not_null         | 
+ public       | localization_settings  | CHECK           | 2200_16416_3_not_null         | 
+ public       | localization_settings  | CHECK           | 2200_16416_4_not_null         | 
+ public       | localization_settings  | CHECK           | 2200_16416_5_not_null         | 
+ public       | localization_settings  | CHECK           | 2200_16416_6_not_null         | 
+ public       | localization_settings  | CHECK           | 2200_16416_7_not_null         | 
+ public       | localization_settings  | PRIMARY KEY     | localization_settings_pkey    | id
+ public       | role_meta              | CHECK           | 2200_16632_1_not_null         | 
+ public       | role_meta              | CHECK           | 2200_16632_3_not_null         | 
+ public       | role_meta              | CHECK           | 2200_16632_4_not_null         | 
+ public       | role_meta              | FOREIGN KEY     | fk_role_meta_role             | role_name
+ public       | role_meta              | PRIMARY KEY     | role_meta_pkey                | role_name
+ public       | roles                  | CHECK           | 2200_16482_1_not_null         | 
+ public       | roles                  | CHECK           | 2200_16482_2_not_null         | 
+ public       | roles                  | CHECK           | 2200_16482_3_not_null         | 
+ public       | roles                  | PRIMARY KEY     | roles_pkey                    | id
+ public       | roles                  | UNIQUE          | roles_name_key                | name
+ public       | support_legal          | CHECK           | 2200_16438_1_not_null         | 
+ public       | support_legal          | PRIMARY KEY     | support_legal_pkey            | id
+ public       | support_legal_settings | CHECK           | 2200_16429_1_not_null         | 
+ public       | support_legal_settings | PRIMARY KEY     | support_legal_settings_pkey   | id
+ public       | users                  | CHECK           | 2200_16493_10_not_null        | 
+ public       | users                  | CHECK           | 2200_16493_1_not_null         | 
+ public       | users                  | CHECK           | 2200_16493_2_not_null         | 
+ public       | users                  | CHECK           | 2200_16493_3_not_null         | 
+ public       | users                  | CHECK           | 2200_16493_4_not_null         | 
+ public       | users                  | CHECK           | 2200_16493_5_not_null         | 
+ public       | users                  | CHECK           | 2200_16493_6_not_null         | 
+ public       | users                  | CHECK           | 2200_16493_7_not_null         | 
+ public       | users                  | CHECK           | 2200_16493_9_not_null         | 
+ public       | users                  | CHECK           | users_status_check            | 
+ public       | users                  | PRIMARY KEY     | users_pkey                    | id
+ public       | users                  | UNIQUE          | users_email_key               | email
+(88 rows)
+
+ table_schema | table_name |  constraint_name  | fk_column | ref_schema | ref_table | ref_column 
+--------------+------------+-------------------+-----------+------------+-----------+------------
+ public       | role_meta  | fk_role_meta_role | role_name | public     | roles     | name
+(1 row)
+
+ roles_regclass 
+----------------
+ roles
+(1 row)
+
+ column_name |        data_type         | is_nullable |  column_default   
+-------------+--------------------------+-------------+-------------------
+ id          | uuid                     | NO          | gen_random_uuid()
+ name        | text                     | NO          | 
+ created_at  | timestamp with time zone | NO          | now()
+(3 rows)
+
+   indexname    |                               indexdef                                
+----------------+-----------------------------------------------------------------------
+ roles_name_key | CREATE UNIQUE INDEX roles_name_key ON public.roles USING btree (name)
+ roles_pkey     | CREATE UNIQUE INDEX roles_pkey ON public.roles USING btree (id)
+(2 rows)
+
+ users_regclass 
+----------------
+ users
+(1 row)
+
+ column_name | data_type | is_nullable | column_default 
+-------------+-----------+-------------+----------------
+(0 rows)
+
+psql:<stdin>:99: ERROR:  column u.role_id does not exist
+LINE 11:   SELECT COUNT(*)::int AS c FROM users u WHERE u.role_id = r...
+                                                        ^
+HINT:  Perhaps you meant to reference the column "u.role".
+ user_roles_regclass 
+---------------------
+ 
+(1 row)
+
+ column_name | data_type | is_nullable | column_default 
+-------------+-----------+-------------+----------------
+(0 rows)
+
+psql:<stdin>:120: ERROR:  relation "user_roles" does not exist
+LINE 7:   SELECT COUNT(*)::int AS c FROM user_roles ur WHERE ur.role...
+                                         ^

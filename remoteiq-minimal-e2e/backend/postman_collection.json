@@ -1,0 +1,50 @@
+{
+  "info": {
+    "name": "RemoteIQ Backend Quick Test",
+    "_postman_id": "remoteiq-quick",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:3001/healthz",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3001",
+          "path": [
+            "healthz"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Devices",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:3001/api/devices?pageSize=5",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3001",
+          "path": [
+            "api",
+            "devices"
+          ],
+          "query": [
+            {
+              "key": "pageSize",
+              "value": "5"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
