@@ -16,6 +16,7 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ToastProvider, ToastViewport, useToast } from "@/lib/toast";
+import { usePersistedTab } from "@/lib/use-persisted-tab";
 
 // Tabs (no Billing)
 import ProfileTab from "./tabs/ProfileTab";
@@ -49,18 +50,31 @@ type TabKey =
     | "developer"
     | "danger";
 
-// High-risk tabs where we prompt on leave if dirty (Billing removed)
-const HIGH_RISK_TABS = new Set<TabKey>([
+const ALLOWED_TABS = [
+    "profile",
     "security",
+    "sessions",
+    "notifications",
     "integrations",
     "api",
+    "developer",
     "danger",
-]);
+] as const;
+
+// High-risk tabs where we prompt on leave if dirty (Billing removed)
+const HIGH_RISK_TABS = new Set<TabKey>(["security", "integrations", "api", "danger"]);
 
 function AccountPageContent() {
     const { push } = useToast();
 
-    const [activeTab, setActiveTab] = React.useState<TabKey>("profile");
+    // Persisted active tab (via ?tab=... + localStorage), sanitized against ALLOWED_TABS
+    const [activeTab, setActiveTab] = usePersistedTab({
+        storageKey: "account.activeTab",
+        allowed: ALLOWED_TABS,
+        defaultValue: "profile",
+        urlParam: "tab",
+    });
+
     const [dirtyByTab, setDirtyByTab] = React.useState<Record<TabKey, boolean>>({
         profile: false,
         security: false,
@@ -91,8 +105,8 @@ function AccountPageContent() {
         const nextTab = next as TabKey;
         if (nextTab === activeTab) return;
 
-        const isDirty = dirtyByTab[activeTab];
-        const isHighRisk = HIGH_RISK_TABS.has(activeTab);
+        const isDirty = dirtyByTab[activeTab as TabKey];
+        const isHighRisk = HIGH_RISK_TABS.has(activeTab as TabKey);
 
         if (isDirty && isHighRisk) {
             setPendingTab(nextTab);
@@ -100,16 +114,17 @@ function AccountPageContent() {
             return;
         }
 
-        setActiveTab(nextTab);
+        setActiveTab(nextTab); // persisted (URL + storage) and sanitized
     };
 
     const confirmLeave = () => {
         setConfirmOpen(false);
         if (pendingTab) {
-            setActiveTab(pendingTab);
+            const prev = activeTab as TabKey;
+            setActiveTab(pendingTab); // updates URL + storage
             setPendingTab(null);
             push({ title: "Unsaved changes discarded", kind: "warning" });
-            setDirtyByTab((prev) => ({ ...prev, [activeTab]: false }));
+            setDirtyByTab((prevState) => ({ ...prevState, [prev]: false }));
         }
     };
 
@@ -118,13 +133,17 @@ function AccountPageContent() {
         setPendingTab(null);
     };
 
-    const registerSaveHandle = (tab: TabKey) => (h: { submit: () => void }) => {
-        saveHandles.current[tab] = h;
-    };
+    const registerSaveHandle =
+        (tab: TabKey) =>
+            (h: { submit: () => void }) => {
+                saveHandles.current[tab] = h;
+            };
 
-    const setDirty = (tab: TabKey) => (dirty: boolean) => {
-        setDirtyByTab((prev) => (prev[tab] === dirty ? prev : { ...prev, [tab]: dirty }));
-    };
+    const setDirty =
+        (tab: TabKey) =>
+            (dirty: boolean) => {
+                setDirtyByTab((prev) => (prev[tab] === dirty ? prev : { ...prev, [tab]: dirty }));
+            };
 
     return (
         <div className="mx-auto max-w-5xl px-4 pb-12 pt-6">
@@ -136,10 +155,10 @@ function AccountPageContent() {
                     <Button
                         variant="outline"
                         onClick={() => {
-                            const h = saveHandles.current[activeTab];
+                            const h = saveHandles.current[activeTab as TabKey];
                             if (h) h.submit();
                         }}
-                        disabled={!dirtyByTab[activeTab]}
+                        disabled={!dirtyByTab[activeTab as TabKey]}
                         aria-label="Save current tab"
                     >
                         Save
@@ -173,11 +192,17 @@ function AccountPageContent() {
                 </TabsContent>
 
                 <TabsContent value="notifications" className="space-y-4">
-                    <NotificationsTab onDirtyChange={setDirty("notifications")} saveHandleRef={registerSaveHandle("notifications")} />
+                    <NotificationsTab
+                        onDirtyChange={setDirty("notifications")}
+                        saveHandleRef={registerSaveHandle("notifications")}
+                    />
                 </TabsContent>
 
                 <TabsContent value="integrations" className="space-y-4">
-                    <IntegrationsTab onDirtyChange={setDirty("integrations")} saveHandleRef={registerSaveHandle("integrations")} />
+                    <IntegrationsTab
+                        onDirtyChange={setDirty("integrations")}
+                        saveHandleRef={registerSaveHandle("integrations")}
+                    />
                 </TabsContent>
 
                 <TabsContent value="api" className="space-y-4">
