@@ -1,3 +1,5 @@
+//remoteiq-minimal-e2e\backend\src\auth\auth.controller.ts
+
 import { Body, Controller, Get, Post, Req, Res, BadRequestException } from "@nestjs/common";
 import { ApiOkResponse, ApiTags } from "@nestjs/swagger";
 import type { Request, Response } from "express";

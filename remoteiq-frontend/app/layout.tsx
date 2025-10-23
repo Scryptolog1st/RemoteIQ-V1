@@ -1,3 +1,4 @@
+// remoteiq-frontend/app/layout.tsx
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -6,6 +7,7 @@ import { cn } from "@/lib/utils";
 import Providers from "@/app/providers";
 import { BrandingProvider } from "./providers/BrandingProvider";
 
+export const runtime = "nodejs"; // ✅ Default to Node runtime
 
 const inter = Inter({ subsets: ["latin"] });
 

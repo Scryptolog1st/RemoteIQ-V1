@@ -101,7 +101,8 @@ const CustomFieldsTab = dynamic(() => import("./tabs/CustomFieldsTab"));
 const SlaTab = dynamic(() => import("./tabs/SlaTab"));
 const TicketingTab = dynamic(() => import("./tabs/TicketingTab"));
 const SecretsTab = dynamic(() => import("./tabs/SecretsTab"));
-const SessionsTab = dynamic(() => import("./tabs/SessionsTab"));
+// ✅ Use the SessionsTab from account (has onDirtyChange/saveHandleRef)
+const SessionsTab = dynamic(() => import("../account/tabs/SessionsTab"));
 const RolesMatrixTab = dynamic(() => import("./tabs/RolesMatrixTab"));
 const MigrationsTab = dynamic(() => import("./tabs/MigrationsTab"));
 const SupportTab = dynamic(() => import("./tabs/SupportTab"));
@@ -474,7 +475,7 @@ export default function AdministrationPage() {
                     className="grid grid-cols-[240px_1fr] items-start gap-6"
                 >
                     {/* Left rail */}
-                    <aside className="w-[240px] shrink-0 self-start sticky top:[70px] sm:top-[70px]">
+                    <aside className="w-[240px] shrink-0 self-start sticky top-[70px] sm:top-[70px]">
                         <Card>
                             <TabsList className="flex h-auto w-full flex-col items-start justify-start gap-1 bg-transparent p-2">
                                 {navItemGroups.map((group, groupIndex) => (
@@ -572,7 +573,12 @@ export default function AdministrationPage() {
                         {tab === "reports" && <ReportsTab push={push} />}
                         {tab === "flags" && <FeatureFlagsTab push={push} />}
                         {tab === "compliance" && <ComplianceTab push={push} />}
-                        {tab === "sessions" && <SessionsTab onDirtyChange={() => { }} saveHandleRef={() => { }} />}
+
+                        {/* ✅ Sessions tab now imports the account version with matching props */}
+                        {tab === "sessions" && (
+                            <SessionsTab onDirtyChange={() => { }} saveHandleRef={() => { }} />
+                        )}
+
                         {tab === "roles_matrix" && <RolesMatrixTab push={push} />}
                         {tab === "sso" && <SsoTab push={push} />}
                     </div>

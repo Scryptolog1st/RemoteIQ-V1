@@ -1,3 +1,5 @@
+//remoteiq-minimal-e2e\backend\src\auth\user-auth.service.ts
+
 import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcryptjs";
