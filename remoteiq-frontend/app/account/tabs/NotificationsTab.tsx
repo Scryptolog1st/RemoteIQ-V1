@@ -21,6 +21,7 @@ type Props = {
   onDirtyChange: (dirty: boolean) => void;
   saveHandleRef: (h: { submit: () => void }) => void;
 };
+
 const DRAFT_KEY = "account.notifications.draft";
 
 export default function NotificationsTab({ onDirtyChange, saveHandleRef }: Props) {
@@ -41,7 +42,8 @@ export default function NotificationsTab({ onDirtyChange, saveHandleRef }: Props
       product: true,
       digest: "daily",
       quiet: { enabled: false, start: "22:00", end: "07:00" },
-      products: ["RMM Alerts", "Billing"],
+      // Removed "Billing"
+      products: ["RMM Alerts"],
     },
     mode: "onChange",
   });
@@ -67,6 +69,7 @@ export default function NotificationsTab({ onDirtyChange, saveHandleRef }: Props
   }, []);
 
   React.useEffect(() => onDirtyChange(form.formState.isDirty), [form.formState.isDirty, onDirtyChange]);
+
   React.useEffect(() => {
     const sub = form.watch((v) => saveDraft(DRAFT_KEY, v as NotificationsForm));
     return () => sub.unsubscribe();
@@ -139,14 +142,15 @@ export default function NotificationsTab({ onDirtyChange, saveHandleRef }: Props
     return () => window.clearTimeout(timeout);
   }, [form.formState.isDirty, status]);
 
-  if (loading)
+  if (loading) {
     return (
       <Card>
         <CardContent className="h-32 animate-pulse" />
       </Card>
     );
+  }
 
-  if (error)
+  if (error) {
     return (
       <Card>
         <CardContent className="p-4">
@@ -159,9 +163,10 @@ export default function NotificationsTab({ onDirtyChange, saveHandleRef }: Props
         </CardContent>
       </Card>
     );
+  }
 
-  // Product/event subscription options (kept as-is for Notifications tab)
-  const products = ["RMM Alerts", "Tickets", "Billing", "Integrations"];
+  // Product/event subscription options (removed "Billing")
+  const products = ["RMM Alerts", "Tickets", "Integrations"];
 
   return (
     <div className="grid gap-6 md:grid-cols-3">
@@ -175,11 +180,7 @@ export default function NotificationsTab({ onDirtyChange, saveHandleRef }: Props
           <div aria-live="polite" className="sr-only">
             {status.message}
           </div>
-          <p
-            aria-hidden="true"
-            className={`text-xs ${status.tone === "error" ? "text-destructive" : "text-muted-foreground"
-              }`}
-          >
+          <p aria-hidden="true" className={`text-xs ${status.tone === "error" ? "text-destructive" : "text-muted-foreground"}`}>
             {status.message}
           </p>
 
@@ -231,7 +232,7 @@ export default function NotificationsTab({ onDirtyChange, saveHandleRef }: Props
             </Select>
           </div>
 
-          {/* Quiet hours — moved directly below Digest frequency */}
+          {/* Quiet hours — below Digest frequency */}
           <div className="max-w-sm">
             <Label className="block">Quiet hours</Label>
             <div className="flex items-center justify-between rounded-md border p-3 gap-3">
@@ -267,9 +268,7 @@ export default function NotificationsTab({ onDirtyChange, saveHandleRef }: Props
                 />
               </div>
             </div>
-            {quietEndError && (
-              <p className="mt-2 text-xs text-destructive">{quietEndError.message}</p>
-            )}
+            {quietEndError && <p className="mt-2 text-xs text-destructive">{quietEndError.message}</p>}
           </div>
 
           {/* Event subscriptions */}
@@ -277,10 +276,7 @@ export default function NotificationsTab({ onDirtyChange, saveHandleRef }: Props
             <Label>Event subscriptions</Label>
             <div className="mt-2 grid grid-cols-2 gap-2">
               {products.map((p) => (
-                <label
-                  key={p}
-                  className="flex items-center gap-2 rounded-md border p-2 text-sm cursor-pointer"
-                >
+                <label key={p} className="flex items-center gap-2 rounded-md border p-2 text-sm cursor-pointer">
                   <input
                     type="checkbox"
                     className="h-4 w-4"
@@ -328,12 +324,8 @@ export default function NotificationsTab({ onDirtyChange, saveHandleRef }: Props
             <DialogTitle>Example email</DialogTitle>
           </DialogHeader>
           <div className="rounded border p-3 text-sm">
-            <div>
-              <strong>Subject:</strong> RemoteIQ — Example alert
-            </div>
-            <div className="mt-2">
-              Hello! This is how your alerts will look. Digest: {form.watch("digest")}.
-            </div>
+            <div><strong>Subject:</strong> RemoteIQ — Example alert</div>
+            <div className="mt-2">Hello! This is how your alerts will look. Digest: {form.watch("digest")}.</div>
           </div>
         </DialogContent>
       </Dialog>
@@ -372,8 +364,7 @@ function InputTime({
   onValueChange: (v: string) => void;
 } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" | "value">) {
   const invalid = rest["aria-invalid"] === true || rest["aria-invalid"] === "true";
-  const base =
-    "rounded-md border bg-background px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1";
+  const base = "rounded-md border bg-background px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1";
   const cls = invalid ? `${base} border-destructive focus-visible:ring-destructive` : `${base} border-input`;
   return <input type="time" value={value} onChange={(e) => onValueChange(e.target.value)} {...rest} className={cls} />;
 }

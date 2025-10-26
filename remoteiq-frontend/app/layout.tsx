@@ -6,6 +6,7 @@ import "@/styles/globals.css";
 import { cn } from "@/lib/utils";
 import Providers from "@/app/providers";
 import { BrandingProvider } from "./providers/BrandingProvider";
+import { ToastProvider } from "@/lib/toast"; // ✅ add this
 
 export const runtime = "nodejs"; // ✅ Default to Node runtime
 
@@ -20,11 +21,13 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={cn("min-h-screen bg-background font-sans antialiased", inter.className)}>
-        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
-          <BrandingProvider>
-            <Providers>{children}</Providers>
-          </BrandingProvider>
-        </ThemeProvider>
+        <ToastProvider> {/* ✅ fixes: useToast must be used within <ToastProvider> */}
+          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+            <BrandingProvider>
+              <Providers>{children}</Providers>
+            </BrandingProvider>
+          </ThemeProvider>
+        </ToastProvider>
       </body>
     </html>
   );
