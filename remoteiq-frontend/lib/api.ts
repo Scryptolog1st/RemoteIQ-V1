@@ -61,6 +61,7 @@ export async function jfetch<T>(path: string, init: JsonInit = {}): Promise<T> {
 // ---------------------------------------------------------------------------
 // Devices (grid + details)
 // ---------------------------------------------------------------------------
+// lib/api.ts  (only showing the Device type block; keep the rest as-is)
 export type Device = {
   id: string;
   hostname: string;
@@ -71,7 +72,11 @@ export type Device = {
   client?: string | null;
   site?: string | null;
   user?: string | string[] | null;
+  version?: string | null;      // <-- add
+  primaryIp?: string | null;    // <-- add
 };
+
+
 
 export type DevicesResponse = {
   items: Device[];
@@ -860,4 +865,46 @@ export async function webauthnFinishRegistration(attestationResponse: any): Prom
 
 export async function deleteWebAuthnCredential(id: string): Promise<void> {
   await jfetch(`/api/users/me/webauthn/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// --- Device software: request uninstall --------------------------------
+export async function requestUninstallSoftware(
+  deviceId: string,
+  body: { name: string; version?: string }
+): Promise<{ accepted: true; jobId?: string }> {
+  const res = await fetch(
+    `${((typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_BASE) || "").replace(/\/+$/, "")}/api/devices/${encodeURIComponent(deviceId)}/actions/uninstall`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!res.ok) {
+    // surface error text
+    let msg = "";
+    try { msg = (await res.clone().json())?.message || ""; } catch { }
+    if (!msg) try { msg = await res.text(); } catch { }
+    throw new Error(msg || `Request failed: ${res.status}`);
+  }
+
+  // Try JSON first
+  let jobId: string | undefined;
+  try {
+    const json = await res.clone().json();
+    jobId = json?.jobId;
+  } catch {
+    /* no json body */
+  }
+
+  // Fallback: parse Location header (e.g. /api/automation/runs/<uuid>)
+  if (!jobId) {
+    const loc = res.headers.get("Location") || res.headers.get("location");
+    const m = loc?.match(/([0-9a-fA-F-]{8}-[0-9a-fA-F-]{4}-[1-5][0-9a-fA-F-]{3}-[89abAB][0-9a-fA-F-]{3}-[0-9a-fA-F-]{12})$/);
+    if (m) jobId = m[1];
+  }
+
+  return { accepted: true, jobId };
 }

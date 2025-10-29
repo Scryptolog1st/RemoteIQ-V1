@@ -1,8 +1,6 @@
-//backend\src\auth\auth.module.ts
-
+// backend/src/auth/auth.module.ts
 import { Module } from "@nestjs/common";
 import { JwtModule } from "@nestjs/jwt";
-import { DatabaseModule } from "../database/database.module";
 import { StorageModule } from "../storage/storage.module";
 import { AuthService } from "./auth.service";
 import { AuthController } from "./auth.controller";
@@ -22,8 +20,7 @@ const EXPIRES_IN_SECONDS = parseExpiresToSeconds(process.env.JWT_EXPIRES, 60 * 6
 
 @Module({
   imports: [
-    DatabaseModule,
-    StorageModule,
+    StorageModule, // ✅ PgPoolService lives here; no Prisma
     JwtModule.register({
       secret: process.env.JWT_SECRET ?? "dev-secret",
       signOptions: { expiresIn: EXPIRES_IN_SECONDS },

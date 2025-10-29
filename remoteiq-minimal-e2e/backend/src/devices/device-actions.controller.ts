@@ -1,4 +1,4 @@
-// src/devices/device-actions.controller.ts
+// backend/src/devices/device-actions.controller.ts
 import {
     Body,
     Controller,
@@ -9,10 +9,10 @@ import {
     UsePipes,
     ValidationPipe,
 } from "@nestjs/common";
-import { RunsService } from "../jobs/runs.service";
+import { JobsService } from "../jobs/jobs.service";
 
 class ActionRequestDto {
-    // optional free-form reason; keep it permissive for now
+    // Optional free-form reason; kept permissive
     reason?: string;
 }
 
@@ -24,45 +24,53 @@ type ActionResponse = {
 @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
 @Controller("/api/devices/:id/actions")
 export class DeviceActionsController {
-    constructor(private readonly runs: RunsService) { }
+    constructor(private readonly jobs: JobsService) { }
 
     /**
      * Reboot the device.
-     * Frontend: POST /api/devices/:id/actions/reboot  -> { accepted, jobId }
+     * POST /api/devices/:id/actions/reboot -> { accepted, jobId }
      */
     @Post("reboot")
     @HttpCode(202)
     async reboot(
-        @Param("id") deviceId: string,
+        @Param("id") agentId: string, // this should be the Agent ID your WS layer uses
         @Body() _body: ActionRequestDto
     ): Promise<ActionResponse> {
-        if (!deviceId) throw new NotFoundException("Missing device id");
-        const jobId = await this.runs.startRun({
-            deviceId,
-            script: "reboot",
-            shell: "bash", // you can switch to powershell for Windows later if desired
-            timeoutSec: 30,
+        if (!agentId) throw new NotFoundException("Missing device id");
+
+        const job = await this.jobs.createRunScriptJob({
+            agentId,
+            language: "powershell",     // or "bash" if your agent is Linux
+            scriptText:
+                // Windows reboot (powershell)
+                'Start-Process "shutdown" -ArgumentList "/r /t 5" -Verb RunAs',
+            timeoutSec: 60,
         });
-        return { accepted: true, jobId };
+
+        return { accepted: true, jobId: job.id };
     }
 
     /**
      * Trigger patch now.
-     * Frontend: POST /api/devices/:id/actions/patch -> { accepted, jobId }
+     * POST /api/devices/:id/actions/patch -> { accepted, jobId }
      */
     @Post("patch")
     @HttpCode(202)
     async patch(
-        @Param("id") deviceId: string,
+        @Param("id") agentId: string,
         @Body() _body: ActionRequestDto
     ): Promise<ActionResponse> {
-        if (!deviceId) throw new NotFoundException("Missing device id");
-        const jobId = await this.runs.startRun({
-            deviceId,
-            script: "patch-now",
-            shell: "bash",
-            timeoutSec: 300,
+        if (!agentId) throw new NotFoundException("Missing device id");
+
+        const job = await this.jobs.createRunScriptJob({
+            agentId,
+            language: "powershell",
+            scriptText:
+                // naive Windows Update start (example; replace with your updater)
+                'Install-Module PSWindowsUpdate -Force -Scope CurrentUser; Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -AutoReboot',
+            timeoutSec: 15 * 60,
         });
-        return { accepted: true, jobId };
+
+        return { accepted: true, jobId: job.id };
     }
 }

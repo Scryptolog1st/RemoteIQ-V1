@@ -1,10 +1,11 @@
-// components/device-table-columns.tsx
+// C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V5\remoteiq-frontend\components\device-table-columns.tsx
 "use client";
 
 import * as React from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { ColumnDef } from "@tanstack/react-table";
+import { formatUsDateTime } from "@/lib/time";
 import {
     ArrowUpDown,
     ArrowUp,
@@ -127,8 +128,15 @@ export const columns: ColumnDef<Device>[] = [
         accessorKey: "lastResponse",
         header: ({ column }) => <SortableHeader column={column} label="Last Response" />,
         cell: ({ row }) => {
-            const v = row.getValue("lastResponse") as string;
-            return <span>{v}</span>;
+            const iso = row.getValue("lastResponse") as string | null | undefined;
+            const pretty = formatUsDateTime(iso);
+            return iso ? (
+                <time dateTime={iso} title={iso}>
+                    {pretty}
+                </time>
+            ) : (
+                <span className="text-muted-foreground">—</span>
+            );
         },
     },
     {

@@ -15,10 +15,9 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ToastProvider, ToastViewport, useToast } from "@/lib/toast";
+import { useToast } from "@/lib/toast";              // ✅ use hook only (provider is in root)
 import { usePersistedTab } from "@/lib/use-persisted-tab";
 
-// Tabs (no Billing)
 import ProfileTab from "./tabs/ProfileTab";
 import SecurityTab from "./tabs/SecurityTab";
 import SessionsTab from "./tabs/SessionsTab";
@@ -27,18 +26,6 @@ import IntegrationsTab from "./tabs/IntegrationsTab";
 import ApiTab from "./tabs/ApiTab";
 import DeveloperTab from "./tabs/DeveloperTab";
 import DangerTab from "./tabs/DangerTab";
-
-/**
- * Wrap with ToastProvider so useToast works anywhere below.
- */
-export default function AccountPage() {
-    return (
-        <ToastProvider>
-            <AccountPageContent />
-            <ToastViewport />
-        </ToastProvider>
-    );
-}
 
 type TabKey =
     | "profile"
@@ -61,13 +48,11 @@ const ALLOWED_TABS = [
     "danger",
 ] as const;
 
-// High-risk tabs where we prompt on leave if dirty (Billing removed)
 const HIGH_RISK_TABS = new Set<TabKey>(["security", "integrations", "api", "danger"]);
 
-function AccountPageContent() {
-    const { push } = useToast();
+export default function AccountPage() {
+    const { toast } = useToast();
 
-    // Persisted active tab (via ?tab=... + localStorage), sanitized against ALLOWED_TABS
     const [activeTab, setActiveTab] = usePersistedTab({
         storageKey: "account.activeTab",
         allowed: ALLOWED_TABS,
@@ -86,7 +71,6 @@ function AccountPageContent() {
         danger: false,
     });
 
-    // Save handles by tab (each tab provides a submit function)
     const saveHandles = React.useRef<Record<TabKey, { submit: () => void } | null>>({
         profile: null,
         security: null,
@@ -113,17 +97,19 @@ function AccountPageContent() {
             setConfirmOpen(true);
             return;
         }
-
-        setActiveTab(nextTab); // persisted (URL + storage) and sanitized
+        setActiveTab(nextTab);
     };
 
     const confirmLeave = () => {
         setConfirmOpen(false);
         if (pendingTab) {
             const prev = activeTab as TabKey;
-            setActiveTab(pendingTab); // updates URL + storage
+            setActiveTab(pendingTab);
             setPendingTab(null);
-            push({ title: "Unsaved changes discarded", kind: "warning" });
+            toast({
+                title: "Unsaved changes discarded",
+                variant: "default", // ✅ valid variant
+            });
             setDirtyByTab((prevState) => ({ ...prevState, [prev]: false }));
         }
     };
@@ -192,17 +178,11 @@ function AccountPageContent() {
                 </TabsContent>
 
                 <TabsContent value="notifications" className="space-y-4">
-                    <NotificationsTab
-                        onDirtyChange={setDirty("notifications")}
-                        saveHandleRef={registerSaveHandle("notifications")}
-                    />
+                    <NotificationsTab onDirtyChange={setDirty("notifications")} saveHandleRef={registerSaveHandle("notifications")} />
                 </TabsContent>
 
                 <TabsContent value="integrations" className="space-y-4">
-                    <IntegrationsTab
-                        onDirtyChange={setDirty("integrations")}
-                        saveHandleRef={registerSaveHandle("integrations")}
-                    />
+                    <IntegrationsTab onDirtyChange={setDirty("integrations")} saveHandleRef={registerSaveHandle("integrations")} />
                 </TabsContent>
 
                 <TabsContent value="api" className="space-y-4">
@@ -218,7 +198,6 @@ function AccountPageContent() {
                 </TabsContent>
             </Tabs>
 
-            {/* Leave with unsaved changes (high-risk only) */}
             <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
                 <AlertDialogContent>
                     <AlertDialogHeader>

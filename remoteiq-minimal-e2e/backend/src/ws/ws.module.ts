@@ -3,13 +3,13 @@ import { Module, forwardRef } from "@nestjs/common";
 import { AgentGateway } from "./agent.gateway";
 import { JobsModule } from "../jobs/jobs.module";
 import { CommonModule } from "../common/common.module";
-
-// ⛔️ NOTE: Removed DatabaseModule import. Not needed for WS.
+import { StorageModule } from "../storage/storage.module"; // <-- bring PgPoolService into WsModule scope
 
 @Module({
   imports: [
-    CommonModule,
-    forwardRef(() => JobsModule), // circular with jobs <-> ws
+    CommonModule,                 // exports SocketRegistry
+    StorageModule,                // exports PgPoolService (required by AgentGateway)
+    forwardRef(() => JobsModule), // circular with jobs <-> ws is fine
   ],
   providers: [AgentGateway],
   exports: [AgentGateway],

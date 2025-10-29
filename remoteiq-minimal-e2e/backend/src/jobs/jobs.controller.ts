@@ -1,3 +1,4 @@
+// backend/src/jobs/jobs.controller.ts
 import {
   Body,
   Controller,
@@ -7,18 +8,17 @@ import {
   Headers,
   UnauthorizedException,
   Logger,
-  Inject,
 } from "@nestjs/common";
 import { JobsService } from "./jobs.service";
-import { PrismaService } from "../database/prisma.service";
+import { PgPoolService } from "../storage/pg-pool.service";
 
 @Controller("/api/admin")
 export class JobsController {
   private readonly logger = new Logger("JobsController");
 
   constructor(
-    @Inject(JobsService) private readonly jobs: JobsService,
-    @Inject(PrismaService) private readonly prisma: PrismaService,
+    private readonly jobs: JobsService,
+    private readonly pg: PgPoolService,
   ) { }
 
   private checkAdmin(key: string | undefined) {
@@ -31,10 +31,12 @@ export class JobsController {
   async listAgents(@Headers("x-admin-api-key") key: string | undefined) {
     this.checkAdmin(key);
     try {
-      const items = await this.prisma.agent.findMany({
-        orderBy: { enrolledAt: "desc" },
-      });
-      return { items };
+      const { rows } = await this.pg.query(
+        `SELECT id, device_id, hostname, os, arch, version, created_at, updated_at
+           FROM agents
+          ORDER BY created_at DESC`,
+      );
+      return { items: rows };
     } catch (e: any) {
       this.logger.error(`listAgents failed: ${e?.message ?? e}`, e?.stack ?? undefined);
       throw e;
@@ -47,7 +49,7 @@ export class JobsController {
     @Body()
     body: {
       agentId: string;
-      language: "powershell";
+      language: "powershell" | "bash";
       scriptText: string;
       args?: string[];
       env?: Record<string, string>;

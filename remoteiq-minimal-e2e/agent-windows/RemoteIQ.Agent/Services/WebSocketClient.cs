@@ -1,420 +1,391 @@
+// remoteiq-minimal-e2e/agent-windows/RemoteIQ.Agent/Services/WebSocketClient.cs
 using System.Diagnostics;
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using RemoteIQ.Agent.Models;
+using RemoteIQ.Agent.Models;            // AgentConfig.From(...)
+using RemoteIQ.Agent.Services.Security; // TokenStore
 
 namespace RemoteIQ.Agent.Services;
 
-public sealed class WebSocketClient : BackgroundService
+/// <summary>
+/// Optional WebSocket client. Connects to ws(s)://{ApiBaseHost}/ws,
+/// sends an agent_hello right after connect, then listens for messages.
+/// Supports "job_run_script" and replies with "job_result".
+/// </summary>
+public class WebSocketClient : IAsyncDisposable
 {
-    private readonly ILogger<WebSocketClient> _logger;
-    private readonly AgentConfigStore _store;
-    private readonly string _baseUrl;
+    private readonly ILogger<WebSocketClient> _log;
+    private readonly IConfiguration _configuration;
+    private readonly TokenStore _tokenStore;
 
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
+    private ClientWebSocket? _ws;
+    private Uri? _endpoint;
 
-    public WebSocketClient(ILogger<WebSocketClient> logger, AgentConfigStore store)
+    private const string AgentVersion = "1.0.0.0";
+
+    public WebSocketClient(
+        ILogger<WebSocketClient> log,
+        IConfiguration configuration,
+        TokenStore tokenStore)
     {
-        _logger = logger;
-        _store = store;
-        _baseUrl = (Environment.GetEnvironmentVariable("REMOTEIQ_URL") ?? "http://localhost:3001").TrimEnd('/');
+        _log = log;
+        _configuration = configuration;
+        _tokenStore = tokenStore;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    public async Task StartAsync(CancellationToken ct)
     {
-        _logger.LogInformation("WebSocket worker starting...");
-        while (!stoppingToken.IsCancellationRequested)
+        var cfg = AgentConfig.From(_configuration);
+
+        if (!Uri.TryCreate(cfg.ApiBase, UriKind.Absolute, out var apiBase))
         {
-            ClientWebSocket? ws = null;
-            try
-            {
-                var cfg = await _store.LoadAsync();
-                if (cfg is null || string.IsNullOrWhiteSpace(cfg.AgentToken))
-                {
-                    _logger.LogInformation("No agent config yet; waiting 2s...");
-                    await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
-                    continue;
-                }
+            _log.LogDebug("WebSocketClient: ApiBase not a valid URI; skipping WS.");
+            return;
+        }
 
-                ws = new ClientWebSocket();
-                // Keep header for upstream auth…
-                ws.Options.SetRequestHeader("Authorization", $"Bearer {cfg.AgentToken}");
+        var wsScheme =
+            apiBase.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? "wss" :
+            apiBase.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ? "ws" : null;
 
-                // …and ALSO pass token in query for the Nest gateway (handshake.query.token).
-                var wsUri = BuildAgentWsUri(cfg.AgentToken);
-                _logger.LogInformation("Connecting to {Url}", wsUri);
-                await ws.ConnectAsync(wsUri, stoppingToken);
-                _logger.LogInformation("WebSocket connected.");
+        if (wsScheme is null)
+        {
+            _log.LogDebug("WebSocketClient: ApiBase scheme not http/https; skipping WS.");
+            return;
+        }
 
-                // Announce + subscribe (unchanged)
-                await SendAsync(ws, new
-                {
-                    type = "agent.hello",
-                    agentId = cfg.AgentId,
-                    hostname = Environment.MachineName,
-                    os = "windows",
-                    arch = Environment.Is64BitProcess ? "x64" : "x86",
-                    version = "0.1.0"
-                }, stoppingToken);
+        _endpoint = new UriBuilder(apiBase)
+        {
+            Scheme = wsScheme,
+            Path = "/ws",
+            Query = ""
+        }.Uri;
 
-                await SendAsync(ws, new { type = "hello", agentId = cfg.AgentId, hostname = Environment.MachineName, version = "0.1.0" }, stoppingToken);
-                await SendAsync(ws, new { type = "subscribe", channel = $"agent:{cfg.AgentId}" }, stoppingToken);
-                await SendAsync(ws, new { type = "subscribe", channel = "agents" }, stoppingToken);
-                await SendAsync(ws, new
-                {
-                    type = "presence.update",
-                    agentId = cfg.AgentId,
-                    status = "online",
-                    ts = NowMs(),
-                    at = DateTimeOffset.UtcNow
-                }, stoppingToken);
+        var tokenData = _tokenStore.Load();
+        var token = tokenData?.AgentToken;
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            _log.LogDebug("WebSocketClient: no token yet; skipping WS connect.");
+            return;
+        }
 
-                // Heartbeat loop using NestJS {event,data}
-                using var hbCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                var hbTask = SendHeartbeatsAsync(ws, cfg.AgentId!, hbCts.Token);
+        _ws = new ClientWebSocket();
+        _ws.Options.SetRequestHeader("Authorization", $"Bearer {token}");
 
-                // Receive loop
-                await ReceiveLoopAsync(ws, cfg, stoppingToken);
+        try
+        {
+            _log.LogInformation("WebSocketClient: connecting to {Endpoint}", _endpoint);
+            await _ws.ConnectAsync(_endpoint, ct);
 
-                hbCts.Cancel();
-                try { await hbTask; } catch { /* ignore */ }
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
-            catch (WebSocketException wse)
-            {
-                _logger.LogWarning(wse, "WebSocket error; will retry in 2s");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "WS loop error");
-            }
-            finally
-            {
-                if (ws is not null)
-                {
-                    try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None); } catch { }
-                    ws.Dispose();
-                }
-            }
+            // Send hello immediately after connecting
+            await SendHelloAsync(tokenData, token, ct);
 
-            await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+            // Start the receive loop (fire-and-forget)
+            _ = Task.Run(() => ReceiveLoopAsync(ct), ct);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "WebSocketClient: connect failed; continuing without WS.");
+            await DisposeAsync();
         }
     }
 
-    private Uri BuildAgentWsUri(string token)
+    private async Task SendHelloAsync(TokenStore.TokenData? tokenData, string jwt, CancellationToken ct)
     {
-        var ub = new UriBuilder(_baseUrl.Replace("http", "ws"))
+        if (_ws is not { State: WebSocketState.Open }) return;
+
+        var agentId = !string.IsNullOrWhiteSpace(tokenData?.AgentId)
+            ? tokenData!.AgentId!
+            : (TryGetClaimFromJwt(jwt, "agentId", "agent_id", "aid", "agent") ?? "unknown");
+
+        var deviceId = !string.IsNullOrWhiteSpace(tokenData?.DeviceId)
+            ? tokenData!.DeviceId!
+            : (TryGetClaimFromJwt(jwt, "deviceId", "device_id", "did", "device") ?? "unknown");
+
+        var hello = new
         {
-            Path = "/ws/agent",
-            Query = $"token={Uri.EscapeDataString(token)}" // critical for gateway
+            t = "agent_hello",
+            agentId,
+            deviceId,
+            hostname = Environment.MachineName,
+            os = "windows",
+            arch = RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant(),
+            version = AgentVersion
         };
-        return ub.Uri;
+
+        await SendJsonAsync(hello, ct);
+        _log.LogInformation("WebSocketClient: sent agent_hello (agentId={AgentId}, deviceId={DeviceId})", agentId, deviceId);
     }
 
-    // ------------------------
-    // Heartbeats (NestJS shape)
-    // ------------------------
-    private async Task SendHeartbeatsAsync(ClientWebSocket ws, string agentId, CancellationToken ct)
+    private static string? TryGetClaimFromJwt(string jwt, params string[] keys)
     {
-        await SendHeartbeatOnce(ws, agentId, ct); // immediate
-        while (!ct.IsCancellationRequested)
+        try
+        {
+            var parts = jwt.Split('.');
+            if (parts.Length < 2) return null;
+
+            static string Pad(string s) => s + new string('=', (4 - s.Length % 4) % 4);
+            var payloadJson = Encoding.UTF8.GetString(
+                Convert.FromBase64String(Pad(parts[1].Replace('-', '+').Replace('_', '/')))
+            );
+
+            using var doc = JsonDocument.Parse(payloadJson);
+            var root = doc.RootElement;
+
+            foreach (var key in keys)
+            {
+                if (root.TryGetProperty(key, out var el))
+                {
+                    return el.ValueKind switch
+                    {
+                        JsonValueKind.String => el.GetString(),
+                        JsonValueKind.Number => el.TryGetInt64(out var n) ? n.ToString() : el.ToString(),
+                        _ => el.ToString()
+                    };
+                }
+            }
+
+            if (root.TryGetProperty("claims", out var claims) && claims.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var key in keys)
+                {
+                    if (claims.TryGetProperty(key, out var el2))
+                    {
+                        return el2.ValueKind == JsonValueKind.String ? el2.GetString() : el2.ToString();
+                    }
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private async Task ReceiveLoopAsync(CancellationToken ct)
+    {
+        if (_ws is null) return;
+
+        var buffer = new byte[256 * 1024];
+        var sb = new StringBuilder();
+
+        while (!ct.IsCancellationRequested && _ws.State == WebSocketState.Open)
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(10), ct);
-                await SendHeartbeatOnce(ws, agentId, ct);
+                sb.Clear();
+                WebSocketReceiveResult? result;
+                do
+                {
+                    result = await _ws.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        _log.LogInformation("WebSocketClient: server closed connection.");
+                        await DisposeAsync();
+                        return;
+                    }
+                    sb.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+                } while (!result.EndOfMessage);
+
+                var text = sb.ToString();
+                if (string.IsNullOrWhiteSpace(text)) continue;
+
+                HandleInbound(text, ct);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Heartbeat send failed");
+                _log.LogDebug(ex, "WebSocketClient: receive error; closing.");
+                break;
             }
         }
+
+        await DisposeAsync();
     }
 
-    private async Task SendHeartbeatOnce(ClientWebSocket ws, string agentId, CancellationToken ct)
-    {
-        var now = DateTimeOffset.UtcNow;
-        var ts = now.ToUnixTimeMilliseconds();
-
-        // Minimal (some handlers bind only on event name)
-        await SendEventAsync(ws, "heartbeat", data: null, ct);
-
-        // Common: include data for convenience on the server side
-        await SendEventAsync(ws, "heartbeat", new { agentId, ts, at = now }, ct);
-    }
-
-    // Helper to send { "event": "<name>", "data": <obj|null> }
-    private async Task SendEventAsync(ClientWebSocket ws, string eventName, object? data, CancellationToken ct)
-    {
-        var obj = new { @event = eventName, data };
-        var json = JsonSerializer.Serialize(obj, JsonOpts);
-        _logger.LogDebug("WS => {Json}", json);
-        var bytes = Encoding.UTF8.GetBytes(json);
-        await ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
-    }
-
-    private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-    // ------------------------
-    // Receive & job handling
-    // ------------------------
-    private async Task ReceiveLoopAsync(ClientWebSocket ws, AgentConfig cfg, CancellationToken ct)
-    {
-        var buffer = new byte[64 * 1024];
-        using var ms = new MemoryStream();
-
-        while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
-        {
-            ms.SetLength(0);
-            WebSocketReceiveResult? r;
-            do
-            {
-                r = await ws.ReceiveAsync(buffer, ct);
-                if (r.MessageType == WebSocketMessageType.Close)
-                {
-                    _logger.LogInformation("WebSocket closing: {Status} {Desc}", r.CloseStatus, r.CloseStatusDescription);
-                    return;
-                }
-                if (r.MessageType == WebSocketMessageType.Binary) continue;
-                ms.Write(buffer, 0, r.Count);
-            }
-            while (!r.EndOfMessage);
-
-            var json = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
-            if (string.IsNullOrWhiteSpace(json)) continue;
-
-            _logger.LogDebug("WS <= {Json}", json);
-            await HandleMessageAsync(ws, cfg, json, ct);
-        }
-    }
-
-    private async Task HandleMessageAsync(ClientWebSocket ws, AgentConfig cfg, string json, CancellationToken ct)
+    private void HandleInbound(string json, CancellationToken ct)
     {
         try
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
+            var t = root.TryGetProperty("t", out var tEl) && tEl.ValueKind == JsonValueKind.String ? tEl.GetString() : null;
+            if (string.IsNullOrEmpty(t)) return;
 
-            // Nest-style {event,data}
-            if (root.TryGetProperty("event", out var evt))
+            if (t == "job_run_script")
             {
-                var ev = evt.GetString();
-                if (string.Equals(ev, "ping", StringComparison.OrdinalIgnoreCase))
+                // Expected payload:
+                // { t, jobId, language: "powershell" | "bash", scriptText, args?, env?, timeoutSec? }
+                var jobId = root.GetProperty("jobId").GetString() ?? "";
+                var language = root.GetProperty("language").GetString() ?? "powershell";
+                var scriptText = root.GetProperty("scriptText").GetString() ?? "";
+                var args = root.TryGetProperty("args", out var aEl) && aEl.ValueKind == JsonValueKind.Array
+                    ? aEl.EnumerateArray().Select(x => x.GetString() ?? "").ToArray()
+                    : Array.Empty<string>();
+                var env = root.TryGetProperty("env", out var eEl) && eEl.ValueKind == JsonValueKind.Object
+                    ? eEl.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString() ?? "")
+                    : new Dictionary<string, string>();
+                var timeoutSec = root.TryGetProperty("timeoutSec", out var toEl) && toEl.TryGetInt32(out var to)
+                    ? to
+                    : 120;
+
+                _ = Task.Run(async () =>
                 {
-                    await SendEventAsync(ws, "pong", new { ts = NowMs() }, ct);
-                    return;
-                }
-            }
+                    var sw = Stopwatch.StartNew();
+                    int exitCode;
+                    string stdout, stderr;
+                    try
+                    {
+                        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && language.Equals("powershell", StringComparison.OrdinalIgnoreCase))
+                        {
+                            (exitCode, stdout, stderr) = await RunPowerShellAsync(scriptText, args, env, TimeSpan.FromSeconds(timeoutSec), ct);
+                        }
+                        else
+                        {
+                            (exitCode, stdout, stderr) = await RunShellAsync(scriptText, args, env, TimeSpan.FromSeconds(timeoutSec), ct);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        exitCode = -1;
+                        stdout = "";
+                        stderr = $"Agent exception: {ex.Message}";
+                    }
+                    sw.Stop();
 
-            // Also support {type:"..."} messages
-            var type = root.TryGetProperty("type", out var t) ? t.GetString() : null;
-
-            if (string.Equals(type, "ping", StringComparison.OrdinalIgnoreCase))
-            {
-                await SendAsync(ws, new { type = "pong", ts = NowMs() }, ct);
-                return;
-            }
-
-            if (string.Equals(type, "job.dispatch", StringComparison.OrdinalIgnoreCase) && root.TryGetProperty("job", out var jobEl))
-            {
-                var job = jobEl.Deserialize<JobDispatch>(JsonOpts);
-                if (job?.Id is null) return;
-                await HandleJobAsync(ws, job, ct);
-                return;
-            }
-
-            if (string.Equals(type, "run-script", StringComparison.OrdinalIgnoreCase))
-            {
-                var simple = root.Deserialize<LegacyRunScriptMessage>(JsonOpts);
-                if (simple?.Id is null || simple.Payload is null) return;
-
-                var job = new JobDispatch
-                {
-                    Id = simple.Id,
-                    Type = "RUN_SCRIPT",
-                    Payload = simple.Payload
-                };
-                await HandleJobAsync(ws, job, ct);
-                return;
+                    var result = new
+                    {
+                        t = "job_result",
+                        jobId,
+                        exitCode,
+                        stdout,
+                        stderr,
+                        durationMs = (long)sw.ElapsedMilliseconds,
+                        status = exitCode == 0 ? "succeeded" : "failed"
+                    };
+                    await SendJsonAsync(result, CancellationToken.None);
+                }, ct);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to handle message: {Json}", json);
+            _log.LogDebug(ex, "WebSocketClient: failed to handle inbound message");
         }
     }
 
-    private async Task HandleJobAsync(ClientWebSocket ws, JobDispatch job, CancellationToken ct)
+    private async Task SendJsonAsync(object payload, CancellationToken ct)
     {
-        _logger.LogInformation("Job received: {JobId} ({Type})", job.Id, job.Type);
-
-        if (!string.Equals(job.Type, "RUN_SCRIPT", StringComparison.OrdinalIgnoreCase) || job.Payload is null)
-        {
-            await SendAsync(ws, new
-            {
-                type = "job.result",
-                jobId = job.Id,
-                exitCode = 1,
-                stdout = "",
-                stderr = "Unsupported job type",
-                durationMs = 0
-            }, ct);
-            return;
-        }
-
-        var sw = Stopwatch.StartNew();
-        var (exitCode, stdout, stderr) = await RunPowershellAsync(job.Payload, ct);
-        sw.Stop();
-
-        await SendAsync(ws, new
-        {
-            type = "job.result",
-            jobId = job.Id,
-            exitCode,
-            stdout,
-            stderr,
-            durationMs = sw.ElapsedMilliseconds
-        }, ct);
-
-        _logger.LogInformation("Job {JobId} finished with {ExitCode}", job.Id, exitCode);
-    }
-
-    private async Task SendAsync(ClientWebSocket ws, object payload, CancellationToken ct)
-    {
-        var json = JsonSerializer.Serialize(payload, JsonOpts);
-        _logger.LogDebug("WS => {Json}", json);
+        if (_ws is not { State: WebSocketState.Open }) return;
+        var json = JsonSerializer.Serialize(payload);
         var bytes = Encoding.UTF8.GetBytes(json);
-        await ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+        await _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct);
     }
 
-    // Records used by dispatch handling
-    public sealed record ScriptPayload
+    private static async Task<(int exitCode, string stdout, string stderr)> RunPowerShellAsync(
+        string scriptText,
+        string[] args,
+        Dictionary<string, string> env,
+        TimeSpan timeout,
+        CancellationToken ct)
     {
-        public string? Language { get; init; }
-        public string? ScriptText { get; init; }
-        public string[]? Args { get; init; }
-        public Dictionary<string, string>? Env { get; init; }
-        public int? TimeoutSec { get; init; }
-    }
-
-    public sealed record JobDispatch
-    {
-        public string? Id { get; init; }
-        public string? Type { get; init; }
-        public ScriptPayload? Payload { get; init; }
-    }
-
-    private sealed record LegacyRunScriptMessage
-    {
-        public string? Id { get; init; }
-        public string? Type { get; init; }
-        public ScriptPayload? Payload { get; init; }
-    }
-
-    // PowerShell runner
-    private static string ResolvePwshOrWindowsPowerShell()
-    {
-        var candidates = new[]
-        {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7-preview", "pwsh.exe"),
-            "pwsh.exe",
-            Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
-            "powershell.exe"
-        };
-
-        foreach (var p in candidates)
-        {
-            try
-            {
-                if (Path.IsPathRooted(p) && File.Exists(p)) return p;
-            }
-            catch { }
-        }
-        return "powershell.exe";
-    }
-
-    private async Task<(int exitCode, string stdout, string stderr)> RunPowershellAsync(ScriptPayload payload, CancellationToken outerCt)
-    {
-        if (!string.Equals(payload.Language, "powershell", StringComparison.OrdinalIgnoreCase))
-            return (1, "", "Only PowerShell is supported.");
-
-        var tempPath = Path.Combine(Path.GetTempPath(), $"riq_{Guid.NewGuid():N}.ps1");
-        await File.WriteAllTextAsync(tempPath, payload.ScriptText ?? string.Empty, new UTF8Encoding(false), outerCt);
-
-        var exe = ResolvePwshOrWindowsPowerShell();
+        // Use -NoProfile -NonInteractive for reliability; pass the script via -Command
         var psi = new ProcessStartInfo
         {
-            FileName = exe,
+            FileName = "powershell.exe",
+            Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command -",
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
         };
 
-        psi.ArgumentList.Add("-NoLogo");
-        psi.ArgumentList.Add("-NoProfile");
-        psi.ArgumentList.Add("-NonInteractive");
-        psi.ArgumentList.Add("-ExecutionPolicy");
-        psi.ArgumentList.Add("Bypass");
-        psi.ArgumentList.Add("-File");
-        psi.ArgumentList.Add(tempPath);
+        foreach (var kv in env) psi.Environment[kv.Key] = kv.Value;
 
-        if (payload.Args is { Length: > 0 })
-            foreach (var a in payload.Args) psi.ArgumentList.Add(a ?? "");
+        using var proc = new Process { StartInfo = psi };
+        proc.Start();
 
-        if (payload.Env is not null)
-            foreach (var kv in payload.Env) psi.Environment[kv.Key] = kv.Value ?? "";
+        await proc.StandardInput.WriteAsync(scriptText);
+        await proc.StandardInput.FlushAsync();
+        proc.StandardInput.Close();
 
-        using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        var sbOut = new StringBuilder();
-        var sbErr = new StringBuilder();
-        var tcsExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        var stderrTask = proc.StandardError.ReadToEndAsync();
 
-        proc.OutputDataReceived += (_, e) => { if (e.Data is not null) sbOut.AppendLine(e.Data); };
-        proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) sbErr.AppendLine(e.Data); };
-        proc.Exited += (_, __) => { try { tcsExit.TrySetResult(proc.ExitCode); } catch { } };
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
 
+        var exited = await Task.Run(() => proc.WaitForExit((int)timeout.TotalMilliseconds), cts.Token);
+        if (!exited)
+        {
+            try { proc.Kill(true); } catch { }
+            return (124, "", "Timeout");
+        }
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+        return (proc.ExitCode, stdout, stderr);
+    }
+
+    private static async Task<(int exitCode, string stdout, string stderr)> RunShellAsync(
+        string scriptText,
+        string[] args,
+        Dictionary<string, string> env,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        // Generic /bin/bash -c 'script'
+        var psi = new ProcessStartInfo
+        {
+            FileName = "/bin/bash",
+            Arguments = "-c \"$@\" bash _ " + EscapeForBash(scriptText),
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        foreach (var kv in env) psi.Environment[kv.Key] = kv.Value;
+
+        using var proc = new Process { StartInfo = psi };
+        proc.Start();
+
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        var stderrTask = proc.StandardError.ReadToEndAsync();
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+
+        var exited = await Task.Run(() => proc.WaitForExit((int)timeout.TotalMilliseconds), cts.Token);
+        if (!exited)
+        {
+            try { proc.Kill(true); } catch { }
+            return (124, "", "Timeout");
+        }
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+        return (proc.ExitCode, stdout, stderr);
+    }
+
+    private static string EscapeForBash(string s)
+        => s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("$", "\\$").Replace("`", "\\`");
+
+    public async ValueTask DisposeAsync()
+    {
         try
         {
-            if (!proc.Start()) return (1, "", "Failed to start PowerShell.");
-            proc.BeginOutputReadLine();
-            proc.BeginErrorReadLine();
-
-            using var ctsTimeout = payload.TimeoutSec is > 0
-                ? CancellationTokenSource.CreateLinkedTokenSource(outerCt)
-                : null;
-
-            if (ctsTimeout is not null)
-                ctsTimeout.CancelAfter(TimeSpan.FromSeconds(payload.TimeoutSec!.Value));
-
-            var ct = ctsTimeout?.Token ?? outerCt;
-            using (ct.Register(() => { try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { } }))
+            if (_ws is { State: WebSocketState.Open })
             {
-                var exit = await tcsExit.Task;
-                return (exit, sbOut.ToString(), sbErr.ToString());
+                await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
             }
         }
-        catch (OperationCanceledException)
-        {
-            return (124, sbOut.ToString(), sbErr.Length == 0 ? "Timed out / canceled" : sbErr.ToString());
-        }
-        catch (Exception ex)
-        {
-            return (1, sbOut.ToString(), "Exception: " + ex.Message);
-        }
+        catch { }
         finally
         {
-            try { File.Delete(tempPath); } catch { }
+            _ws?.Dispose();
+            _ws = null;
         }
     }
 }

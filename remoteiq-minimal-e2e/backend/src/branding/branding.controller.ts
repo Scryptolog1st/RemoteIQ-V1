@@ -16,8 +16,9 @@ import { existsSync, mkdirSync } from 'fs';
 import { join, extname } from 'path';
 import type { Request } from 'express';
 
-import { BrandingService } from './branding.service';
+import { BrandingService } from "./branding.service";
 import { UpdateBrandingDto } from './dto/update-branding.dto';
+
 
 @ApiTags('branding')
 @Controller('api/branding')

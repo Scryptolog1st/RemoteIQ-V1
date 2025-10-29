@@ -1,7 +1,7 @@
 // src/automation/automation.controller.ts
 import { Body, Controller, Get, NotFoundException, Param, Post } from "@nestjs/common";
 import { randomUUID } from "crypto";
-import { WsGateway } from "../realtime/ws.gateway";
+import { AgentGateway } from "../ws/agent.gateway";
 
 type RunScriptDto = {
     deviceId: string;
@@ -22,7 +22,7 @@ const JOBS = new Map<string, Job>();
 
 @Controller("/api/automation")
 export class AutomationController {
-    constructor(private readonly ws: WsGateway) { }
+    constructor(private readonly ws: AgentGateway) { }
 
     @Post("runs")
     async start(@Body() body: RunScriptDto) {

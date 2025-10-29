@@ -22,10 +22,18 @@ import PatchTab from "@/components/patch-tab";
 import RemoteTab from "@/components/remote-tab";
 
 import { useDevice } from "@/lib/use-device";
-import { rebootDevice, patchDevice } from "@/lib/api";
+
+// US-style "MM/DD/YYYY - H:MM AM/PM"
+const dtFmt = new Intl.DateTimeFormat("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+});
 
 type BadgeStatus = "healthy" | "warning" | "critical" | "offline";
-
 function normalizeStatus(s?: string): BadgeStatus {
     switch ((s || "").toLowerCase()) {
         case "healthy": return "healthy";
@@ -49,28 +57,30 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
     // Backend device (authoritative)
     const { device: apiDevice, loading, error, refresh } = useDevice(params.deviceId);
 
-    // Non-typed values (UI-only fields or not in UiDevice type)
-    const archVal = apiDevice?.arch ?? (localDevice as any)?.arch ?? "—";
-
     // Merge API device into the UI shape your page expects.
     const device: UiDevice | undefined = React.useMemo(() => {
         if (!apiDevice && !localDevice) return undefined;
 
-        const alias = localDevice?.alias ?? apiDevice?.hostname ?? "";
-        const client = (localDevice as any)?.client ?? "—";
-        const site = (localDevice as any)?.site ?? "—";
-        const lastResponse = (localDevice as any)?.lastResponse ?? (apiDevice?.lastSeen ?? null);
         const status = normalizeStatus(apiDevice?.status ?? (localDevice as any)?.status);
-
         const merged: Partial<UiDevice> = {
             id: apiDevice?.id ?? localDevice?.id ?? params.deviceId,
             hostname: apiDevice?.hostname ?? localDevice?.hostname ?? "",
-            alias,
-            client,
-            site,
+            alias: localDevice?.alias ?? apiDevice?.hostname ?? "",
+            client: (localDevice as any)?.client ?? "—",
+            site: (localDevice as any)?.site ?? "—",
             os: apiDevice?.os ?? (localDevice as any)?.os ?? "Unknown",
             status,
-            lastResponse,
+            // we’ll carry lastSeen through as lastResponse for display
+            lastResponse: apiDevice?.lastSeen ?? (localDevice as any)?.lastResponse ?? null,
+            // extra fields from backend we’ll show directly below
+            ...(apiDevice
+                ? {
+                    arch: apiDevice.arch,
+                    primaryIp: apiDevice.primaryIp,
+                    version: apiDevice.version,
+                    user: apiDevice.user,
+                }
+                : {}),
         };
 
         return merged as unknown as UiDevice;
@@ -83,22 +93,16 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
     const openRunScript = React.useCallback(() => {
         const current = new URLSearchParams(search?.toString() ?? "");
         current.set("device", params.deviceId);
-        // ✅ Next 15 types expect a single arg
         router.push(`${pathname}?${current.toString()}`);
     }, [params.deviceId, pathname, router, search]);
 
-    // Wire up actions (optional buttons)
     const onReboot = React.useCallback(async () => {
-        if (!device?.id) return;
-        await rebootDevice(device.id);
-    }, [device?.id]);
-
+        // TODO: wire your reboot call if available
+    }, []);
     const onPatchNow = React.useCallback(async () => {
-        if (!device?.id) return;
-        await patchDevice(device.id);
-    }, [device?.id]);
+        // TODO: wire your patch call if available
+    }, []);
 
-    // Loading / error / not found states
     if (loading && !device) {
         return (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-center p-6">
@@ -106,7 +110,6 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
             </div>
         );
     }
-
     if (error && !device) {
         return (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-center p-6">
@@ -114,29 +117,33 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                 <p className="text-muted-foreground">{String(error)}</p>
                 <div className="flex gap-2">
                     <Button variant="outline" onClick={refresh}>Retry</Button>
-                    <Button asChild>
-                        <Link href="/">Return to Dashboard</Link>
-                    </Button>
+                    <Button asChild><Link href="/">Return to Dashboard</Link></Button>
                 </div>
             </div>
         );
     }
-
     if (!device) {
         return (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-center p-6">
                 <h2 className="text-2xl font-semibold">Device Not Found</h2>
-                <p className="text-muted-foreground">
-                    The device with ID &apos;{params.deviceId}&apos; could not be found.
-                </p>
-                <Button asChild>
-                    <Link href="/">Return to Dashboard</Link>
-                </Button>
+                <p className="text-muted-foreground">The device with ID &apos;{params.deviceId}&apos; could not be found.</p>
+                <Button asChild><Link href="/">Return to Dashboard</Link></Button>
             </div>
         );
     }
 
     const badgeStatus: BadgeStatus = normalizeStatus(device.status as unknown as string);
+
+    const lastSeenIso = (device as any).lastResponse as string | null;
+    const lastSeenStr = lastSeenIso
+        ? dtFmt.format(new Date(lastSeenIso)).replace(",", " -")
+        : "—";
+
+    const os = (device as any).os ?? "Unknown";
+    const arch = (device as any).arch ?? "—";
+    const primaryIp = (device as any).primaryIp ?? "—";
+    const version = (device as any).version ?? "—";
+    const currentUser = (device as any).user ?? "—";
 
     return (
         <main className="grid flex-1 items-start gap-4 p-4 sm:px-6 sm:py-0 md:gap-8">
@@ -145,15 +152,11 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                     <Breadcrumb className="hidden md:flex">
                         <BreadcrumbList>
                             <BreadcrumbItem>
-                                <BreadcrumbLink asChild>
-                                    <Link href="/">Dashboard</Link>
-                                </BreadcrumbLink>
+                                <BreadcrumbLink asChild><Link href="/">Dashboard</Link></BreadcrumbLink>
                             </BreadcrumbItem>
                             <BreadcrumbSeparator />
                             <BreadcrumbItem>
-                                <BreadcrumbLink asChild>
-                                    <Link href="/customers">Devices</Link>
-                                </BreadcrumbLink>
+                                <BreadcrumbLink asChild><Link href="/customers">Devices</Link></BreadcrumbLink>
                             </BreadcrumbItem>
                             <BreadcrumbSeparator />
                             <BreadcrumbItem>
@@ -163,23 +166,14 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                     </Breadcrumb>
 
                     <div className="flex items-center gap-2">
-                        <Button
-                            variant="default"
-                            size="sm"
-                            onClick={openRunScript}
-                            className="gap-2"
-                            title="Open Run Script modal preselected for this device"
-                        >
-                            <Play className="h-4 w-4" />
-                            Run Script
+                        <Button variant="default" size="sm" onClick={openRunScript} className="gap-2" title="Open Run Script">
+                            <Play className="h-4 w-4" /> Run Script
                         </Button>
-                        <Button variant="outline" size="sm" title="Trigger a patch cycle on this device" onClick={onPatchNow}>
-                            <ShieldCheck className="h-4 w-4" />
-                            Patch Now
+                        <Button variant="outline" size="sm" title="Trigger a patch cycle" onClick={onPatchNow}>
+                            <ShieldCheck className="h-4 w-4" /> Patch Now
                         </Button>
                         <Button variant="destructive" size="sm" title="Reboot this device" onClick={onReboot}>
-                            <Power className="h-4 w-4" />
-                            Reboot
+                            <Power className="h-4 w-4" /> Reboot
                         </Button>
                     </div>
                 </div>
@@ -194,9 +188,7 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                             <TabsTrigger value="software">Software</TabsTrigger>
                         </TabsList>
                         <div className="ml-auto flex items-center gap-2">
-                            <Button variant="outline" size="sm" onClick={refresh} title="Refresh device data">
-                                Refresh
-                            </Button>
+                            <Button variant="outline" size="sm" onClick={refresh} title="Refresh device data">Refresh</Button>
                         </div>
                     </div>
 
@@ -229,41 +221,37 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                                     </div>
                                     <div className="space-y-1">
                                         <h3 className="font-medium text-muted-foreground">Operating System</h3>
-                                        <p>{(device as any).os}</p>
+                                        <p>{os}</p>
                                     </div>
                                     <div className="space-y-1">
                                         <h3 className="font-medium text-muted-foreground">Architecture</h3>
-                                        <p>{archVal}</p>
+                                        <p>{arch}</p>
                                     </div>
                                     <div className="space-y-1">
                                         <h3 className="font-medium text-muted-foreground">IP Address</h3>
-                                        <p>192.168.1.10</p>
+                                        <p>{primaryIp}</p>
                                     </div>
                                     <div className="space-y-1">
                                         <h3 className="font-medium text-muted-foreground">Agent Version</h3>
-                                        <p>1.2.3</p>
+                                        <p>{version}</p>
                                     </div>
                                     <div className="space-y-1">
                                         <h3 className="font-medium text-muted-foreground">Last Response</h3>
-                                        <p>{(device as any).lastResponse ?? "—"}</p>
+                                        <p>{lastSeenStr}</p>
+                                    </div>
+                                    <div className="space-y-1 md:col-span-3">
+                                        <h3 className="font-medium text-muted-foreground">Logged-in User</h3>
+                                        <p>{currentUser}</p>
                                     </div>
                                 </div>
                             </CardContent>
                         </Card>
                     </TabsContent>
 
-                    <TabsContent value="remote">
-                        <RemoteTab />
-                    </TabsContent>
-                    <TabsContent value="checks">
-                        <ChecksAndAlertsTab />
-                    </TabsContent>
-                    <TabsContent value="patch">
-                        <PatchTab />
-                    </TabsContent>
-                    <TabsContent value="software">
-                        <SoftwareTab />
-                    </TabsContent>
+                    <TabsContent value="remote"><RemoteTab /></TabsContent>
+                    <TabsContent value="checks"><ChecksAndAlertsTab /></TabsContent>
+                    <TabsContent value="patch"><PatchTab /></TabsContent>
+                    <TabsContent value="software"><SoftwareTab /></TabsContent>
                 </Tabs>
             </div>
         </main>
