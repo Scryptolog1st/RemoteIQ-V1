@@ -1,4 +1,4 @@
-// lib/api.ts
+// C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V6\remoteiq-frontend\lib\api.ts
 // Centralized typed API client used by the frontend (Next.js / React).
 // It reads NEXT_PUBLIC_API_BASE for the backend base URL.
 
@@ -116,10 +116,34 @@ export type DeviceCheck = {
   status: "Passing" | "Warning" | "Failing";
   lastRun: string;
   output: string;
+
+  // ----- Optional advanced fields (rendered when present) -----
+  /** e.g., "PING","CPU","MEMORY","DISK","SERVICE","PROCESS","PORT","WINEVENT","SOFTWARE","SECURITY","SCRIPT","PATCH","CERT","SMART","RDP","SMB","FIREWALL" */
+  type?: string;
+  /** severity classification applied to alerting paths */
+  severity?: "WARN" | "CRIT";
+  /** optional grouping like "Performance", "Security", "Compliance" */
+  category?: string;
+  /** arbitrary labels */
+  tags?: string[];
+  /** thresholds used to evaluate this check (key/value) */
+  thresholds?: Record<string, any>;
+  /** metrics captured by the last run (key/value) */
+  metrics?: Record<string, number | string | boolean>;
+  /** true if within an active maintenance window */
+  maintenance?: boolean;
+  /** deduplication key for alert correlation */
+  dedupeKey?: string;
 };
 
-export async function fetchDeviceChecks(deviceId: string): Promise<{ items: DeviceCheck[] }> {
-  return await jfetch(`/api/devices/${encodeURIComponent(deviceId)}/checks`);
+/** Fetch device-scoped checks; limit is optional and passed to the backend if provided. */
+export async function fetchDeviceChecks(
+  deviceId: string,
+  limit?: number
+): Promise<{ items: DeviceCheck[] }> {
+  const base = `/api/devices/${encodeURIComponent(deviceId)}/checks`;
+  const path = typeof limit === "number" ? `${base}?limit=${encodeURIComponent(String(limit))}` : base;
+  return await jfetch(path);
 }
 
 export type DeviceSoftware = {
@@ -864,7 +888,7 @@ export async function webauthnFinishRegistration(attestationResponse: any): Prom
 }
 
 export async function deleteWebAuthnCredential(id: string): Promise<void> {
-  await jfetch(`/api/users/me/webauthn/${encodeURIComponent(id)}`, { method: "DELETE" });
+  return await jfetch(`/api/users/me/webauthn/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 // --- Device software: request uninstall --------------------------------
