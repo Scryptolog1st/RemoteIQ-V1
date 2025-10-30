@@ -121,7 +121,6 @@ function StatusCountBadge({
 }
 
 /* ------------------------------- types (UI) ------------------------------- */
-/** Extended fields are optional; backend can add them progressively */
 type Severity = "WARN" | "CRIT";
 type CheckType =
     | "PING" | "CPU" | "MEMORY" | "DISK" | "SERVICE" | "PROCESS" | "PORT" | "WINEVENT"
@@ -130,8 +129,8 @@ type CheckType =
 type AugmentedDeviceCheck = DeviceCheck & {
     type?: CheckType;
     severity?: Severity;
-    category?: string;            // e.g., "Performance", "Security", "Compliance"
-    tags?: string[];              // arbitrary labels
+    category?: string;
+    tags?: string[];
     thresholds?: Record<string, any>;
     metrics?: Record<string, number | string | boolean>;
     maintenance?: boolean;
@@ -176,6 +175,20 @@ function toCSV(items: AugmentedDeviceCheck[]) {
     return [header, ...lines].join("\n");
 }
 
+/* ------------------------------ WS utilities ------------------------------ */
+
+type UiWsIncoming =
+    | { t: "welcome" }
+    | { t: "device_checks_updated"; deviceId: string; changed?: number; at?: string }
+    | { t: "error"; message: string }
+    | { t: "pong" };
+
+function makeWsUrl(path = "/ws") {
+    const proto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss" : "ws";
+    const host = typeof window !== "undefined" ? window.location.host : "";
+    return `${proto}://${host}${path}`;
+}
+
 /* -------------------------------- component ------------------------------- */
 
 export default function ChecksAndAlertsTab() {
@@ -193,6 +206,158 @@ export default function ChecksAndAlertsTab() {
     const [typeFilter, setTypeFilter] = React.useState<"all" | CheckType>("all");
     const [selected, setSelected] = React.useState<AugmentedDeviceCheck | null>(null);
     const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
+
+    // WS refs
+    const wsRef = React.useRef<WebSocket | null>(null);
+    const retryRef = React.useRef<number>(1000); // backoff ms
+    const pingTimerRef = React.useRef<number | null>(null);
+    const reconnectTimerRef = React.useRef<number | null>(null);
+    const debounceFetchTimerRef = React.useRef<number | null>(null);
+    const subscribedDeviceRef = React.useRef<string | null>(null);
+    const connectWsRef = React.useRef<null | (() => void)>(null);
+
+    const isVisible = () =>
+        typeof document !== "undefined" ? document.visibilityState !== "hidden" : true;
+
+    const clearTimer = (ref: React.MutableRefObject<number | null>) => {
+        if (ref.current) {
+            window.clearTimeout(ref.current);
+            ref.current = null;
+        }
+    };
+
+    // ✅ Memoized stop/start heartbeat
+    const stopHeartbeat = React.useCallback(() => {
+        clearTimer(pingTimerRef);
+    }, []);
+
+    const startHeartbeat = React.useCallback(() => {
+        stopHeartbeat();
+        // Send ping every 25s to keep idle proxies happy
+        pingTimerRef.current = window.setTimeout(function tick() {
+            try {
+                wsRef.current?.send(JSON.stringify({ t: "ping", at: new Date().toISOString() }));
+            } catch { /* ignore */ }
+            pingTimerRef.current = window.setTimeout(tick, 25_000) as unknown as number;
+        }, 25_000) as unknown as number;
+    }, [stopHeartbeat]);
+
+    // ✅ Memoized reconnect scheduler using a ref to avoid circular deps
+    const scheduleReconnect = React.useCallback(() => {
+        clearTimer(reconnectTimerRef);
+        const delay = Math.min(retryRef.current, 25_000);
+        reconnectTimerRef.current = window.setTimeout(() => {
+            connectWsRef.current?.(); // call latest connectWs
+            retryRef.current = Math.min(retryRef.current * 2, 25_000);
+        }, delay) as unknown as number;
+    }, []);
+
+    // Stable, memoized safe close
+    const safeCloseWs = React.useCallback(() => {
+        try { wsRef.current?.close(); } catch { /* ignore */ }
+        wsRef.current = null;
+        stopHeartbeat();
+    }, [stopHeartbeat]);
+
+    // Subscribe helper (no need to memoize)
+    const subscribeDevice = (id: string | null | undefined) => {
+        const target = id ? String(id) : null;
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+        if (!target) return;
+        if (subscribedDeviceRef.current === target) return;
+        subscribedDeviceRef.current = target;
+        try {
+            wsRef.current.send(JSON.stringify({ t: "subscribe_device", deviceId: target }));
+        } catch { /* ignore */ }
+    };
+
+    // ✅ Memoized incoming handler
+    const refetchChecks = React.useCallback(async () => {
+        if (!deviceId) return;
+        try {
+            setLoading(true);
+            setError(null);
+            const { items } = await fetchDeviceChecks(deviceId);
+            setItems((items ?? []) as AugmentedDeviceCheck[]);
+        } catch (e: any) {
+            setError(e?.message ?? "Failed to load checks");
+        } finally {
+            setLoading(false);
+        }
+    }, [deviceId]);
+
+    const handleIncoming = React.useCallback((raw: MessageEvent<string>) => {
+        let msg: UiWsIncoming | null = null;
+        try {
+            msg = JSON.parse(raw.data) as UiWsIncoming;
+        } catch {
+            return;
+        }
+        if (!msg || typeof (msg as any).t !== "string") return;
+
+        switch (msg.t) {
+            case "welcome": {
+                subscribeDevice(deviceId);
+                break;
+            }
+            case "device_checks_updated": {
+                if (!deviceId || msg.deviceId !== String(deviceId)) return;
+                if (debounceFetchTimerRef.current) window.clearTimeout(debounceFetchTimerRef.current);
+                debounceFetchTimerRef.current = window.setTimeout(async () => {
+                    await refetchChecks();
+                }, 500) as unknown as number;
+                break;
+            }
+            case "pong": {
+                break;
+            }
+            case "error": {
+                // eslint-disable-next-line no-console
+                console.warn("[UI WS] error:", (msg as any).message);
+                break;
+            }
+            default:
+                break;
+        }
+    }, [deviceId, refetchChecks]);
+
+    // ✅ Memoized connect using memoized deps; store to ref for scheduler
+    const connectWs = React.useCallback(() => {
+        if (!isVisible()) return; // don't connect while tab hidden
+        try {
+            safeCloseWs();
+            const url = makeWsUrl("/ws");
+            const ws = new WebSocket(url);
+            wsRef.current = ws;
+
+            ws.addEventListener("open", () => {
+                retryRef.current = 1000; // reset backoff
+                startHeartbeat();
+                try {
+                    ws.send(JSON.stringify({ t: "ui_hello" }));
+                } catch { /* ignore */ }
+                subscribeDevice(deviceId);
+            });
+
+            ws.addEventListener("message", handleIncoming);
+            ws.addEventListener("close", () => {
+                stopHeartbeat();
+                scheduleReconnect();
+            });
+            ws.addEventListener("error", () => {
+                try { ws.close(); } catch { /* ignore */ }
+            });
+        } catch {
+            scheduleReconnect();
+        }
+    }, [deviceId, handleIncoming, safeCloseWs, scheduleReconnect, startHeartbeat, stopHeartbeat]);
+
+    // Keep the latest connectWs in a ref (used by scheduleReconnect)
+    React.useEffect(() => {
+        connectWsRef.current = connectWs;
+    }, [connectWs]);
+
+    /* ----------------------------- initial data load ----------------------------- */
 
     React.useEffect(() => {
         let alive = true;
@@ -212,6 +377,34 @@ export default function ChecksAndAlertsTab() {
         })();
         return () => { alive = false; };
     }, [deviceId]);
+
+    /* ----------------------------- ws lifecycle & vis ---------------------------- */
+
+    React.useEffect(() => {
+        // Initial connect
+        connectWs();
+
+        // Re-subscribe when deviceId changes
+        if (deviceId) subscribeDevice(deviceId);
+
+        // Visibility handling (pause connections while hidden)
+        const onVis = () => {
+            if (isVisible()) {
+                connectWsRef.current?.();
+            } else {
+                // optional: could safeCloseWs() to save resources
+            }
+        };
+        document.addEventListener("visibilitychange", onVis);
+
+        return () => {
+            document.removeEventListener("visibilitychange", onVis);
+            clearTimer(reconnectTimerRef);
+            clearTimer(pingTimerRef);
+            clearTimer(debounceFetchTimerRef);
+            safeCloseWs();
+        };
+    }, [deviceId, connectWs, safeCloseWs]);
 
     // counts
     const failingChecks = items.filter((c) => c.status === "Failing").length;
@@ -271,10 +464,10 @@ export default function ChecksAndAlertsTab() {
     };
 
     // NOTE: Bulk actions are UI-only for now (backend endpoints pending)
-    const bulkAck = () => {/* wire to /api/alerts/bulk when ready */ };
-    const bulkSilence = () => {/* wire to /api/alerts/bulk when ready */ };
-    const bulkResolve = () => {/* wire to /api/alerts/bulk when ready */ };
-    const runNow = (id: string) => {/* wire to /api/check-assignments/:id/run or /api/checks/:id/run */ };
+    const bulkAck = () => { /* wire to /api/alerts/bulk when ready */ };
+    const bulkSilence = () => { /* wire to /api/alerts/bulk when ready */ };
+    const bulkResolve = () => { /* wire to /api/alerts/bulk when ready */ };
+    const runNow = (id: string) => { /* wire to /api/check-assignments/:id/run or /api/checks/:id/run */ };
 
     return (
         <TooltipProvider>
@@ -367,7 +560,7 @@ export default function ChecksAndAlertsTab() {
 
                                 <Separator orientation="vertical" className="mx-1 h-6" />
 
-                                <div className="relative w-full sm:w-64">
+                                <div className="relative w/full sm:w-64">
                                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                                     <Input
                                         className="pl-8"
@@ -510,7 +703,7 @@ export default function ChecksAndAlertsTab() {
                                             aria-label="Select all"
                                         />
                                     </TableHead>
-                                    <TableHead className="w-[44px]"></TableHead>
+                                    <TableHead className="w/[44px]"></TableHead>
                                     <TableHead>Check Name</TableHead>
                                     <TableHead className="hidden xl:table-cell">Type</TableHead>
                                     <TableHead className="hidden lg:table-cell">Severity</TableHead>
@@ -564,7 +757,6 @@ export default function ChecksAndAlertsTab() {
                                                 >
                                                     {check.name}
                                                 </button>
-                                                {/* tags inline */}
                                                 {!!tags?.length && (
                                                     <div className="mt-1 flex flex-wrap gap-1">
                                                         {tags.slice(0, 4).map((t) => (
@@ -646,7 +838,6 @@ export default function ChecksAndAlertsTab() {
 
                                             <TableCell className="hidden md:table-cell">
                                                 <div className="flex items-center gap-2">
-                                                    {/* Run now is disabled until backend is wired */}
                                                     <Tooltip>
                                                         <TooltipTrigger asChild>
                                                             <span>
@@ -658,7 +849,6 @@ export default function ChecksAndAlertsTab() {
                                                         <TooltipContent>Dispatch on-demand run (backend pending)</TooltipContent>
                                                     </Tooltip>
 
-                                                    {/* Silence single (stub) */}
                                                     <Tooltip>
                                                         <TooltipTrigger asChild>
                                                             <span>

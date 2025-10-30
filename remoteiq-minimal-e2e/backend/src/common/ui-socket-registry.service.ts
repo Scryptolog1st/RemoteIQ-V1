@@ -1,3 +1,4 @@
+// backend/src/common/ui-socket-registry.service.ts
 import { Injectable, Logger } from "@nestjs/common";
 import type { WebSocket } from "ws";
 
@@ -85,7 +86,9 @@ export class UiSocketRegistry {
                 // Close with policy code; UI can auto-reconnect if appropriate
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 (s as any).close?.(4401, "User sessions revoked");
-            } catch { /* ignore */ }
+            } catch {
+                /* ignore */
+            }
             this.remove(s);
             n++;
         }

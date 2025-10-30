@@ -1,7 +1,7 @@
-//remoteiq-minimal-e2e\backend\src\checks\checks.service.ts
-
 import { Injectable, Logger, NotImplementedException } from '@nestjs/common';
 import { PgPoolService } from '../storage/pg-pool.service';
+import { UiSocketRegistry } from '../common/ui-socket-registry.service'; // <-- NEW
+
 
 export enum CheckScope {
     DEVICE = 'DEVICE',
@@ -60,7 +60,14 @@ function toUiStatus(s?: string | null): DeviceCheckDTO['status'] {
 @Injectable()
 export class ChecksService {
     private readonly logger = new Logger(ChecksService.name);
-    constructor(private readonly pg: PgPoolService) { }
+
+    // per-device debounce to avoid floods; value is NodeJS.Timeout in Node
+    private readonly deviceDebounce = new Map<string, ReturnType<typeof setTimeout>>();
+
+    constructor(
+        private readonly pg: PgPoolService,
+        private readonly uiSockets: UiSocketRegistry, // <-- NEW
+    ) { }
 
     /* ====================== Public read for UI (existing) ====================== */
 
@@ -260,8 +267,7 @@ export class ChecksService {
             const status = normalizeStatus(r.status);
             const severity = r.severity === 'CRIT' ? 'CRIT' : r.severity === 'WARN' ? 'WARN' : null;
 
-            const output =
-                (r.output ?? '').slice(0, MAX_OUTPUT);
+            const output = (r.output ?? '').slice(0, MAX_OUTPUT);
 
             const startedAt = r.startedAt ? new Date(r.startedAt) : new Date();
             const finishedAt = r.finishedAt ? new Date(r.finishedAt) : new Date();
@@ -283,11 +289,39 @@ export class ChecksService {
             inserted++;
         }
 
-        // TODO (optional): broadcast a UI event (different WS gateway for dashboards).
-        // For now we log; front-end polls via HTTP.
-        this.logger.log(`ingested ${inserted} run(s) for device ${input.deviceId}; new assignments: ${assignmentsCreated}`);
+        // Debounced UI broadcast per device (only if something changed)
+        if (inserted > 0) {
+            this.scheduleDeviceBroadcast(input.deviceId, inserted);
+        }
 
+        this.logger.log(`ingested ${inserted} run(s) for device ${input.deviceId}; new assignments: ${assignmentsCreated}`);
         return { inserted, assignmentsCreated };
+    }
+
+    /** Debounce + emit device_checks_updated to subscribed UI sockets */
+    private scheduleDeviceBroadcast(deviceId: string, changed: number) {
+        const key = String(deviceId);
+        const existing = this.deviceDebounce.get(key);
+        if (existing) clearTimeout(existing as any);
+
+        const handle = setTimeout(() => {
+            try {
+                const payload = {
+                    t: 'device_checks_updated',
+                    deviceId: key,
+                    changed,
+                    at: new Date().toISOString(),
+                };
+                const sent = this.uiSockets.broadcastToDevice(key, payload);
+                this.logger.debug(`Broadcast device_checks_updated to ${sent} UI socket(s) for device ${key}`);
+            } catch (e: any) {
+                this.logger.warn(`Broadcast failed for device ${key}: ${e?.message ?? e}`);
+            } finally {
+                this.deviceDebounce.delete(key);
+            }
+        }, 750); // 750ms debounce: balances freshness vs. flapping
+
+        this.deviceDebounce.set(key, handle);
     }
 
     /* ============== Server-driven assignments for agent (optional) ============ */

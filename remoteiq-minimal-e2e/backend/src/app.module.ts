@@ -1,4 +1,4 @@
-//remoteiq-minimal-e2e\backend\src\app.module.ts
+// remoteiq-minimal-e2e/backend/src/app.module.ts
 
 import { Module, MiddlewareConsumer, NestModule } from "@nestjs/common";
 import { ServeStaticModule } from "@nestjs/serve-static";
@@ -25,7 +25,9 @@ import { ImapModule } from "./imap/imap.module";
 import { SessionCleanerService } from "./maintenance/session-cleaner.service";
 
 import { JwtModule } from "@nestjs/jwt";
-import { AuthCookieMiddleware } from "./common/auth-cookie.middleware";
+
+// ✅ correct path: the middleware file is under /auth, not /common
+import { AuthCookieMiddleware } from "./auth/auth-cookie.middleware";
 
 // ✅ bring PgPoolService into the AppModule DI context
 import { StorageModule } from "./storage/storage.module";

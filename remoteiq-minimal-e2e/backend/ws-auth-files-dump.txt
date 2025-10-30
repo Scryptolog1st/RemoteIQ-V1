@@ -1,0 +1,732 @@
+# RemoteIQ WS/Auth Files Dump
+BaseDir: C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V6\remoteiq-minimal-e2e\backend
+Generated: 2025-10-29 22:13:57-04:00
+
+## Files Summary
+* [FOUND] src/auth/auth-cookie.guard.ts (3990 bytes, modified 2025-10-21 12:57:07)
+* [FOUND] src/auth/auth-cookie.middleware.ts (2422 bytes, modified 2025-10-21 12:11:59)
+* [FOUND] src/auth/auth.service.ts (3971 bytes, modified 2025-10-29 13:12:12)
+* [FOUND] src/auth/user-auth.service.ts (11986 bytes, modified 2025-10-22 20:17:47)
+* [FOUND] src/common/guards/admin-api.guard.ts (823 bytes, modified 2025-10-20 16:58:06)
+* [FOUND] src/common/types.ts (596 bytes, modified 2025-10-15 16:39:42)
+
+
+================== BEGIN FILE: src/auth/auth-cookie.guard.ts ==================
+Exists: YES
+Path  : C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V6\remoteiq-minimal-e2e\backend\src\auth\auth-cookie.guard.ts
+Size  : 3990 bytes
+MTime : 2025-10-21 12:57:07 -04:00
+SHA256: 3017C21FB876F115485C276BBCF9FFB79608AFFCF884EB8BB8B80F44C88A795A
+----- START CONTENT (with line numbers) -----
+    1: // src/auth/auth-cookie.guard.ts
+    2: import {
+    3:     CanActivate,
+    4:     ExecutionContext,
+    5:     Injectable,
+    6:     UnauthorizedException,
+    7: } from "@nestjs/common";
+    8: import type { Request, Response } from "express";
+    9: import { JwtService } from "@nestjs/jwt";
+   10: import { PgPoolService } from "../storage/pg-pool.service";
+   11: import { randomUUID } from "crypto";
+   12: 
+   13: function parseCookieMaxAge(): number {
+   14:     const v = process.env.AUTH_COOKIE_MAX_AGE_MS;
+   15:     const n = Number(v);
+   16:     return Number.isFinite(n) && n > 0 ? n : 7 * 24 * 60 * 60 * 1000; // 7d
+   17: }
+   18: 
+   19: @Injectable()
+   20: export class AuthCookieGuard implements CanActivate {
+   21:     constructor(
+   22:         private readonly jwt: JwtService,
+   23:         private readonly pg: PgPoolService,
+   24:     ) { }
+   25: 
+   26:     async canActivate(context: ExecutionContext): Promise<boolean> {
+   27:         const req = context.switchToHttp().getRequest<Request>();
+   28:         const res = context.switchToHttp().getResponse<Response>();
+   29: 
+   30:         const cookieName = process.env.AUTH_COOKIE_NAME || "auth_token";
+   31:         const tokenFromCookie =
+   32:             (req as any).cookies?.[cookieName] ||
+   33:             (req as any).cookies?.["auth_token"];
+   34:         const tokenFromHeader =
+   35:             req.headers.authorization?.replace(/^Bearer\s+/i, "") || null;
+   36: 
+   37:         const token = tokenFromCookie || tokenFromHeader;
+   38:         if (!token) throw new UnauthorizedException("No auth token provided");
+   39: 
+   40:         let payload: any;
+   41:         try {
+   42:             payload = await this.jwt.verifyAsync(token);
+   43:         } catch {
+   44:             throw new UnauthorizedException("Invalid token");
+   45:         }
+   46:         if (!payload?.sub) throw new UnauthorizedException("Invalid token payload");
+   47: 
+   48:         (req as any).user = {
+   49:             id: String(payload.sub),
+   50:             email: payload.email,
+   51:             name: payload.name,
+   52:             role: payload.role,
+   53:         };
+   54: 
+   55:         // Legacy token migration: mint a new token with jti and set cookie
+   56:         let jti: string | null = payload?.jti != null ? String(payload.jti) : null;
+   57:         if (!jti) {
+   58:             jti = randomUUID();
+   59:             const newToken = await this.jwt.signAsync({
+   60:                 sub: payload.sub,
+   61:                 email: payload.email,
+   62:                 name: payload.name,
+   63:                 role: payload.role,
+   64:                 jti,
+   65:             });
+   66: 
+   67:             res.cookie(cookieName, newToken, {
+   68:                 httpOnly: true,
+   69:                 sameSite: "lax",
+   70:                 secure: process.env.NODE_ENV === "production",
+   71:                 path: "/",
+   72:                 maxAge: parseCookieMaxAge(),
+   73:             });
+   74: 
+   75:             const ipHdr = (req.headers["x-forwarded-for"] as string) || "";
+   76:             const ip = (ipHdr.split(",")[0] || req.ip || "").trim() || null;
+   77:             const ua = req.get("user-agent") || null;
+   78: 
+   79:             await this.pg.query(
+   80:                 `
+   81:         INSERT INTO sessions (user_id, jti, user_agent, ip)
+   82:         VALUES ($1, $2, $3, $4)
+   83:         ON CONFLICT (jti) DO UPDATE
+   84:            SET last_seen_at = now(),
+   85:                user_agent   = COALESCE(EXCLUDED.user_agent, sessions.user_agent),
+   86:                ip           = COALESCE(EXCLUDED.ip, sessions.ip)
+   87:         `,
+   88:                 [String(payload.sub), jti, ua, ip],
+   89:             );
+   90:         }
+   91: 
+   92:         (req as any).jti = jti;
+   93: 
+   94:         // Best-effort "touch"
+   95:         if (jti) {
+   96:             const ipHdr = (req.headers["x-forwarded-for"] as string) || "";
+   97:             const ip = (ipHdr.split(",")[0] || req.ip || "").trim() || null;
+   98:             const ua = req.get("user-agent") || null;
+   99:             this.pg
+  100:                 .query(
+  101:                     `UPDATE sessions
+  102:              SET last_seen_at = now(),
+  103:                  ip = COALESCE($2, ip),
+  104:                  user_agent = COALESCE($3, user_agent)
+  105:            WHERE jti = $1 AND revoked_at IS NULL`,
+  106:                     [jti, ip, ua],
+  107:                 )
+  108:                 .catch(() => { });
+  109:         }
+  110: 
+  111:         return true;
+  112:     }
+  113: }
+----- END CONTENT -----
+=================== END FILE: src/auth/auth-cookie.guard.ts ===================
+
+================== BEGIN FILE: src/auth/auth-cookie.middleware.ts ==================
+Exists: YES
+Path  : C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V6\remoteiq-minimal-e2e\backend\src\auth\auth-cookie.middleware.ts
+Size  : 2422 bytes
+MTime : 2025-10-21 12:11:59 -04:00
+SHA256: F2B1FCBB59C80DC0BED91DB96F4F88CF39335B4A0D718621A5B8C98508D177E5
+----- START CONTENT (with line numbers) -----
+    1: import { Injectable, NestMiddleware } from "@nestjs/common";
+    2: import type { Request, Response, NextFunction } from "express";
+    3: import { JwtService } from "@nestjs/jwt";
+    4: import { PgPoolService } from "../storage/pg-pool.service";
+    5: 
+    6: const SESSION_IDLE_UPDATE_SECS =
+    7:     parseInt(process.env.SESSION_IDLE_UPDATE_SECS || "300", 10) || 300;
+    8: 
+    9: @Injectable()
+   10: export class AuthCookieMiddleware implements NestMiddleware {
+   11:     private readonly cookieName: string;
+   12: 
+   13:     constructor(
+   14:         private readonly jwt: JwtService,
+   15:         private readonly pg: PgPoolService,
+   16:     ) {
+   17:         this.cookieName = process.env.AUTH_COOKIE_NAME || "auth_token";
+   18:     }
+   19: 
+   20:     async use(req: Request & { user?: any; jti?: string }, res: Response, next: NextFunction) {
+   21:         try {
+   22:             const token = (req as any).cookies?.[this.cookieName];
+   23:             if (!token) return next();
+   24: 
+   25:             const payload = await this.jwt.verifyAsync<any>(token, {
+   26:                 secret: process.env.JWT_SECRET ?? "dev-secret",
+   27:             });
+   28: 
+   29:             // Normalize to the fields your app expects AND capture JTI
+   30:             req.user = {
+   31:                 id: payload.sub ?? payload.id,
+   32:                 email: payload.email,
+   33:                 name: payload.name,
+   34:                 role: payload.role,
+   35:             };
+   36:             req.jti = payload.jti;
+   37: 
+   38:             // If we have a JTI, ensure it's not revoked and gently bump last_seen
+   39:             if (req.jti) {
+   40:                 const { rows } = await this.pg.query<{ revoked_at: string | null; last_seen_at: string }>(
+   41:                     `SELECT revoked_at, last_seen_at FROM sessions WHERE jti = $1 LIMIT 1`,
+   42:                     [req.jti],
+   43:                 );
+   44:                 if (rows.length > 0) {
+   45:                     if (rows[0].revoked_at) {
+   46:                         return res.status(401).json({ message: "Session revoked." });
+   47:                     }
+   48:                     const lastSeen = new Date(rows[0].last_seen_at).getTime();
+   49:                     const now = Date.now();
+   50:                     if ((now - lastSeen) / 1000 > SESSION_IDLE_UPDATE_SECS) {
+   51:                         await this.pg.query(`UPDATE sessions SET last_seen_at = now() WHERE jti = $1`, [req.jti]);
+   52:                     }
+   53:                 }
+   54:             }
+   55:         } catch {
+   56:             // ignore broken/expired token; route can still choose to 401
+   57:         }
+   58:         next();
+   59:     }
+   60: }
+----- END CONTENT -----
+=================== END FILE: src/auth/auth-cookie.middleware.ts ===================
+
+================== BEGIN FILE: src/auth/auth.service.ts ==================
+Exists: YES
+Path  : C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V6\remoteiq-minimal-e2e\backend\src\auth\auth.service.ts
+Size  : 3971 bytes
+MTime : 2025-10-29 13:12:12 -04:00
+SHA256: 40CBF01FEF9A260E7328A8F7ABCADB95F9EDF29203AD910C8EB20674BC8CDD82
+----- START CONTENT (with line numbers) -----
+    1: // backend/src/auth/auth.service.ts
+    2: import {
+    3:   Injectable,
+    4:   UnauthorizedException,
+    5:   InternalServerErrorException,
+    6:   Logger,
+    7: } from "@nestjs/common";
+    8: import { createHash, randomBytes } from "node:crypto";
+    9: import { PgPoolService } from "../storage/pg-pool.service";
+   10: 
+   11: function newOpaqueToken(): string {
+   12:   return randomBytes(18).toString("base64url");
+   13: }
+   14: function hashToken(token: string): string {
+   15:   return createHash("sha256").update(token, "utf8").digest("hex");
+   16: }
+   17: 
+   18: type EnrollInput = {
+   19:   enrollmentSecret: string;
+   20:   deviceId: string;
+   21:   hostname: string;
+   22:   os: string;
+   23:   arch: string;
+   24:   version: string;
+   25: };
+   26: 
+   27: @Injectable()
+   28: export class AuthService {
+   29:   private readonly logger = new Logger(AuthService.name);
+   30: 
+   31:   constructor(private readonly pg: PgPoolService) { }
+   32: 
+   33:   /**
+   34:    * Enroll (or re-enroll) an agent.
+   35:    * - Validates the shared enrollment secret
+   36:    * - If deviceId exists, rotates token & updates metadata
+   37:    * - Otherwise creates a new agent
+   38:    * - Returns { agentId, agentToken }
+   39:    *
+   40:    * Tables/columns expected:
+   41:    *   agents(id uuid pk, device_id text unique, hostname text, os text, arch text,
+   42:    *          version text, token_hash text, created_at timestamptz, updated_at timestamptz)
+   43:    */
+   44:   async enrollAgent(input: EnrollInput) {
+   45:     const expected = process.env.ENROLLMENT_SECRET || "";
+   46:     if (!expected || input.enrollmentSecret !== expected) {
+   47:       throw new UnauthorizedException("Invalid enrollment secret");
+   48:     }
+   49: 
+   50:     try {
+   51:       const token = newOpaqueToken();
+   52:       const tokenHash = hashToken(token);
+   53: 
+   54:       // Look up existing agent by deviceId to avoid duplicates
+   55:       const existing = await this.pg.query<{ id: string }>(
+   56:         `SELECT id FROM agents WHERE device_id = $1 LIMIT 1`,
+   57:         [input.deviceId],
+   58:       );
+   59: 
+   60:       let agentId: string;
+   61: 
+   62:       if (existing.rows[0]) {
+   63:         const { rows } = await this.pg.query<{ id: string }>(
+   64:           `UPDATE agents
+   65:               SET hostname   = $2,
+   66:                   os         = $3,
+   67:                   arch       = $4,
+   68:                   version    = $5,
+   69:                   token_hash = $6,
+   70:                   updated_at = now()
+   71:             WHERE id = $1
+   72:           RETURNING id`,
+   73:           [
+   74:             existing.rows[0].id,
+   75:             input.hostname,
+   76:             input.os,
+   77:             input.arch,
+   78:             input.version,
+   79:             tokenHash,
+   80:           ],
+   81:         );
+   82:         agentId = rows[0].id;
+   83:         this.logger.log(`Re-enrolled agent ${agentId} (deviceId=${input.deviceId}).`);
+   84:       } else {
+   85:         const { rows } = await this.pg.query<{ id: string }>(
+   86:           `INSERT INTO agents (device_id, hostname, os, arch, version, token_hash, created_at, updated_at)
+   87:            VALUES ($1, $2, $3, $4, $5, $6, now(), now())
+   88:            RETURNING id`,
+   89:           [
+   90:             input.deviceId,
+   91:             input.hostname,
+   92:             input.os,
+   93:             input.arch,
+   94:             input.version,
+   95:             tokenHash,
+   96:           ],
+   97:         );
+   98:         agentId = rows[0].id;
+   99:         this.logger.log(`Enrolled new agent ${agentId} (deviceId=${input.deviceId}).`);
+  100:       }
+  101: 
+  102:       return { agentId, agentToken: token };
+  103:     } catch (e: any) {
+  104:       const msg = e?.message ?? String(e);
+  105:       this.logger.error(`Enroll failed: ${msg}`, e?.stack ?? undefined);
+  106:       const dev = (process.env.NODE_ENV || "").toLowerCase() === "development";
+  107:       throw new InternalServerErrorException(dev ? `Enroll failed: ${msg}` : "Enroll failed");
+  108:     }
+  109:   }
+  110: 
+  111:   /**
+  112:    * Validate an agent’s bearer token (opaque string).
+  113:    * Returns the agentId on success, or null on failure.
+  114:    */
+  115:   async validateAgentToken(rawToken: string): Promise<string | null> {
+  116:     const tokenHash = hashToken(rawToken);
+  117:     const { rows } = await this.pg.query<{ id: string }>(
+  118:       `SELECT id FROM agents WHERE token_hash = $1 LIMIT 1`,
+  119:       [tokenHash],
+  120:     );
+  121:     return rows[0]?.id ?? null;
+  122:   }
+  123: }
+----- END CONTENT -----
+=================== END FILE: src/auth/auth.service.ts ===================
+
+================== BEGIN FILE: src/auth/user-auth.service.ts ==================
+Exists: YES
+Path  : C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V6\remoteiq-minimal-e2e\backend\src\auth\user-auth.service.ts
+Size  : 11986 bytes
+MTime : 2025-10-22 20:17:47 -04:00
+SHA256: 9F5DEEF2AB8C0D08E376C946E7DA2D793EDFB77E5EEF4689D639A7E6775DA520
+----- START CONTENT (with line numbers) -----
+    1: //remoteiq-minimal-e2e\backend\src\auth\user-auth.service.ts
+    2: 
+    3: import { Injectable, UnauthorizedException } from "@nestjs/common";
+    4: import { JwtService } from "@nestjs/jwt";
+    5: import * as bcrypt from "bcryptjs";
+    6: import { PgPoolService } from "../storage/pg-pool.service";
+    7: import { randomUUID, createHash, createHmac } from "crypto";
+    8: 
+    9: type WebUser = { id: string; email: string; name: string; role: "admin" | "user" | string };
+   10: 
+   11: // DB user type that includes 2FA fields when needed
+   12: type DbUser = {
+   13:     id: string;
+   14:     email: string;
+   15:     name: string | null;
+   16:     role: string | null;
+   17:     status?: string;
+   18:     suspended?: boolean | null;
+   19:     password_hash?: string | null;
+   20:     two_factor_enabled?: boolean | null;
+   21:     two_factor_secret?: string | null;            // base32 or otpauth URI
+   22:     two_factor_recovery_codes?: string[] | null;  // stored as hashes
+   23: };
+   24: 
+   25: @Injectable()
+   26: export class UserAuthService {
+   27:     constructor(
+   28:         private readonly jwt: JwtService,
+   29:         private readonly pg: PgPoolService,
+   30:     ) { }
+   31: 
+   32:     /** Validate against Postgres users table */
+   33:     async validateUser(email: string, password: string): Promise<WebUser> {
+   34:         const { rows } = await this.pg.query(
+   35:             `
+   36:       SELECT id, name, email, role, status, suspended, password_hash
+   37:       FROM users
+   38:       WHERE LOWER(email) = LOWER($1)
+   39:       LIMIT 1
+   40:       `,
+   41:             [email],
+   42:         );
+   43: 
+   44:         const u = rows[0];
+   45:         if (!u) throw new UnauthorizedException("Invalid email or password");
+   46:         if (u.status !== "active" || u.suspended === true) {
+   47:             throw new UnauthorizedException("Invalid email or password");
+   48:         }
+   49:         if (!u.password_hash || typeof u.password_hash !== "string") {
+   50:             throw new UnauthorizedException("Invalid email or password");
+   51:         }
+   52: 
+   53:         const ok = await bcrypt.compare(password, u.password_hash);
+   54:         if (!ok) throw new UnauthorizedException("Invalid email or password");
+   55: 
+   56:         const role: string = u.role || "User";
+   57:         return { id: u.id, email: u.email, name: u.name, role };
+   58:     }
+   59: 
+   60:     /** Issue a JWT **with JTI** (uses JwtModule config). */
+   61:     async signWithJti(user: WebUser): Promise<{ token: string; jti: string }> {
+   62:         const jti = randomUUID();
+   63:         const token = await this.jwt.signAsync({
+   64:             sub: user.id,
+   65:             email: user.email,
+   66:             name: user.name,
+   67:             role: user.role,
+   68:             jti,
+   69:         });
+   70:         return { token, jti };
+   71:     }
+   72: 
+   73:     /** Back-compat signer without JTI (not used by login anymore) */
+   74:     async sign(user: WebUser): Promise<string> {
+   75:         return this.jwt.signAsync({
+   76:             sub: user.id,
+   77:             email: user.email,
+   78:             name: user.name,
+   79:             role: user.role,
+   80:         });
+   81:     }
+   82: 
+   83:     /** Verify cookie token and re-hydrate a minimal user */
+   84:     async verify(token: string): Promise<WebUser | null> {
+   85:         try {
+   86:             const payload = await this.jwt.verifyAsync<{ sub: string; email: string; name?: string; role: string }>(token);
+   87:             const { rows } = await this.pg.query(
+   88:                 `SELECT id, name, email, role, status, suspended FROM users WHERE id = $1 LIMIT 1`,
+   89:                 [payload.sub],
+   90:             );
+   91:             const u = rows[0];
+   92:             if (!u || u.status !== "active" || u.suspended === true) return null;
+   93:             return { id: u.id, email: u.email, name: u.name, role: u.role || "User" };
+   94:         } catch {
+   95:             return null;
+   96:         }
+   97:     }
+   98: 
+   99:     /** Record a session row keyed by JTI (upsert on jti). */
+  100:     async recordSessionOnLogin(userId: string, jti: string, ua?: string, ip?: string) {
+  101:         await this.pg.query(
+  102:             `
+  103:       INSERT INTO sessions (user_id, jti, user_agent, ip)
+  104:       VALUES ($1, $2, $3, $4)
+  105:       ON CONFLICT (jti) DO UPDATE
+  106:          SET last_seen_at = now(),
+  107:              user_agent   = COALESCE(EXCLUDED.user_agent, sessions.user_agent),
+  108:              ip           = COALESCE(EXCLUDED.ip, sessions.ip)
+  109:       `,
+  110:             [userId, jti, ua || null, ip || null],
+  111:         );
+  112:     }
+  113: 
+  114:     // =============== 2FA: feature toggles & device trust =================
+  115: 
+  116:     async isTwoFactorEnabled(userId: string): Promise<boolean> {
+  117:         try {
+  118:             const { rows } = await this.pg.query<{ enabled: boolean }>(
+  119:                 `
+  120:       select
+  121:         (coalesce(two_factor_enabled,false) = true)
+  122:         and (two_factor_secret is not null and length(trim(two_factor_secret)) > 0)
+  123:         as enabled
+  124:       from users
+  125:       where id = $1
+  126:       limit 1
+  127:       `,
+  128:                 [userId],
+  129:             );
+  130:             return !!rows[0]?.enabled;
+  131:         } catch (e: any) {
+  132:             if (e?.code === "42703") return false; // columns not migrated yet
+  133:             throw e;
+  134:         }
+  135:     }
+  136: 
+  137: 
+  138:     async isDeviceTrusted(userId: string, deviceFingerprint: string | null): Promise<boolean> {
+  139:         if (!deviceFingerprint) return false;
+  140:         try {
+  141:             const { rows } = await this.pg.query(
+  142:                 `SELECT 1
+  143:            FROM trusted_devices
+  144:           WHERE user_id = $1
+  145:             AND device_fingerprint = $2
+  146:             AND now() < expires_at
+  147:           LIMIT 1`,
+  148:                 [userId, deviceFingerprint],
+  149:             );
+  150:             return !!rows[0];
+  151:         } catch {
+  152:             // table may not exist yet
+  153:             return false;
+  154:         }
+  155:     }
+  156: 
+  157:     async trustCurrentDevice(userId: string, deviceFingerprint: string) {
+  158:         try {
+  159:             await this.pg.query(
+  160:                 `INSERT INTO trusted_devices (user_id, device_fingerprint, created_at, expires_at)
+  161:          VALUES ($1, $2, now(), now() + interval '90 days')
+  162:          ON CONFLICT (user_id, device_fingerprint)
+  163:          DO UPDATE SET expires_at = EXCLUDED.expires_at`,
+  164:                 [userId, deviceFingerprint],
+  165:             );
+  166:         } catch {
+  167:             // ignore if table not present
+  168:         }
+  169:     }
+  170: 
+  171:     // =============== 2FA: challenge token (short-lived) ==================
+  172: 
+  173:     async createChallengeToken(userId: string): Promise<{ token: string; jti: string }> {
+  174:         const jti = randomUUID();
+  175:         const token = await this.jwt.signAsync(
+  176:             { sub: userId, typ: "2fa_challenge", jti },
+  177:             { expiresIn: "10m" },
+  178:         );
+  179:         try {
+  180:             await this.pg.query(
+  181:                 `INSERT INTO login_challenges (id, user_id, created_at)
+  182:          VALUES ($1, $2, now())
+  183:          ON CONFLICT DO NOTHING`,
+  184:                 [jti, userId],
+  185:             );
+  186:         } catch {
+  187:             // ignore if table not present
+  188:         }
+  189:         return { token, jti };
+  190:     }
+  191: 
+  192:     async verifyChallengeToken(challengeToken: string): Promise<{ userId: string; jti: string }> {
+  193:         let decoded: any;
+  194:         try {
+  195:             decoded = await this.jwt.verifyAsync(challengeToken);
+  196:         } catch {
+  197:             throw new UnauthorizedException("Invalid or expired challenge");
+  198:         }
+  199:         if (!decoded?.sub || decoded?.typ !== "2fa_challenge" || !decoded?.jti) {
+  200:             throw new UnauthorizedException("Invalid challenge");
+  201:         }
+  202:         return { userId: decoded.sub as string, jti: decoded.jti as string };
+  203:     }
+  204: 
+  205:     // =============== 2FA: verification (TOTP or recovery) =================
+  206: 
+  207:     async verifyTOTP(userId: string, code: string): Promise<boolean> {
+  208:         const u = await this.findUserTwoFactor(userId);
+  209:         if (!u?.two_factor_enabled || !u.two_factor_secret) return false;
+  210: 
+  211:         // Accept otpauth:// URIs & normalize base32 secret
+  212:         const normalized = this.normalizeTotpSecret(u.two_factor_secret);
+  213:         return this.verifyTotpBasic(normalized, code.trim());
+  214:     }
+  215: 
+  216:     async consumeRecoveryCode(userId: string, recoveryCode: string): Promise<boolean> {
+  217:         const u = await this.findUserTwoFactor(userId);
+  218:         if (!u) return false;
+  219:         const codes = u.two_factor_recovery_codes || [];
+  220:         if (codes.length === 0) return false;
+  221: 
+  222:         const candidateHash = this.sha256Hex(recoveryCode.trim().toLowerCase());
+  223:         const idx = codes.findIndex((h) => h === candidateHash);
+  224:         if (idx === -1) return false;
+  225: 
+  226:         const next = [...codes.slice(0, idx), ...codes.slice(idx + 1)];
+  227:         await this.pg.query(
+  228:             `UPDATE users SET two_factor_recovery_codes = $1 WHERE id = $2`,
+  229:             [next, userId],
+  230:         );
+  231:         return true;
+  232:     }
+  233: 
+  234:     // =============== Lookups =================
+  235: 
+  236:     async findUserById(userId: string): Promise<WebUser> {
+  237:         const { rows } = await this.pg.query<DbUser>(
+  238:             `SELECT id, name, email, role FROM users WHERE id = $1 LIMIT 1`,
+  239:             [userId],
+  240:         );
+  241:         const u = rows[0];
+  242:         if (!u) throw new UnauthorizedException("User not found");
+  243:         return { id: u.id, email: String(u.email), name: String(u.name), role: u.role || "User" };
+  244:     }
+  245: 
+  246:     async findUserTwoFactor(userId: string): Promise<DbUser | null> {
+  247:         try {
+  248:             const { rows } = await this.pg.query<DbUser>(
+  249:                 `SELECT id, two_factor_enabled, two_factor_secret, two_factor_recovery_codes
+  250:            FROM users WHERE id = $1 LIMIT 1`,
+  251:                 [userId],
+  252:             );
+  253:             return rows[0] ?? null;
+  254:         } catch (e: any) {
+  255:             // 42703 = undefined_column -> 2FA columns not migrated yet
+  256:             if (e?.code === "42703") return null;
+  257:             throw e;
+  258:         }
+  259:     }
+  260: 
+  261:     // =============== Minimal TOTP (robust parsing) =================
+  262: 
+  263:     /** Accepts raw base32 or full otpauth:// URI; strips spaces and uppercases */
+  264:     private normalizeTotpSecret(input: string): string {
+  265:         try {
+  266:             if (input.toLowerCase().startsWith("otpauth://")) {
+  267:                 const u = new URL(input);
+  268:                 const secret = u.searchParams.get("secret") || "";
+  269:                 return secret.replace(/\s+/g, "").toUpperCase();
+  270:             }
+  271:         } catch {
+  272:             // not a valid URL; fall through
+  273:         }
+  274:         return input.replace(/\s+/g, "").toUpperCase();
+  275:     }
+  276: 
+  277:     private sha256Hex(s: string) {
+  278:         return createHash("sha256").update(s).digest("hex");
+  279:     }
+  280: 
+  281:     private verifyTotpBasic(base32Secret: string, code: string): boolean {
+  282:         try {
+  283:             const secret = this.base32Decode(base32Secret);
+  284:             const step = 30;
+  285:             const t = Math.floor(Date.now() / 1000 / step);
+  286: 
+  287:             // Allow a bit more skew: [-2, -1, 0, +1, +2]
+  288:             for (const off of [-2, -1, 0, 1, 2]) {
+  289:                 const counter = Buffer.alloc(8);
+  290:                 counter.writeBigUInt64BE(BigInt(t + off));
+  291:                 const hmac = createHmac("sha1", secret).update(counter).digest();
+  292:                 const offset = hmac[hmac.length - 1] & 0xf;
+  293:                 const bin =
+  294:                     ((hmac[offset] & 0x7f) << 24) |
+  295:                     ((hmac[offset + 1] & 0xff) << 16) |
+  296:                     ((hmac[offset + 2] & 0xff) << 8) |
+  297:                     (hmac[offset + 3] & 0xff);
+  298:                 const otp = (bin % 1_000_000).toString().padStart(6, "0");
+  299:                 if (otp === code) return true;
+  300:             }
+  301:             return false;
+  302:         } catch {
+  303:             return false;
+  304:         }
+  305:     }
+  306: 
+  307:     private base32Decode(b32: string): Buffer {
+  308:         const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  309:         const clean = b32.replace(/=+$/, "").toUpperCase().replace(/[^A-Z2-7]/g, "");
+  310:         let bits = "";
+  311:         for (const c of clean) {
+  312:             const v = alphabet.indexOf(c);
+  313:             if (v < 0) continue;
+  314:             bits += v.toString(2).padStart(5, "0");
+  315:         }
+  316:         const bytes: number[] = [];
+  317:         for (let i = 0; i + 8 <= bits.length; i += 8) {
+  318:             bytes.push(parseInt(bits.substring(i, i + 8), 2));
+  319:         }
+  320:         return Buffer.from(bytes);
+  321:     }
+  322: }
+----- END CONTENT -----
+=================== END FILE: src/auth/user-auth.service.ts ===================
+
+================== BEGIN FILE: src/common/guards/admin-api.guard.ts ==================
+Exists: YES
+Path  : C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V6\remoteiq-minimal-e2e\backend\src\common\guards\admin-api.guard.ts
+Size  : 823 bytes
+MTime : 2025-10-20 16:58:06 -04:00
+SHA256: F1EAE70363807A07B32274066E1B19D7C852AE54FEF9F128E073102CD9E8F637
+----- START CONTENT (with line numbers) -----
+    1: import {
+    2:     CanActivate,
+    3:     ExecutionContext,
+    4:     Injectable,
+    5:     UnauthorizedException,
+    6: } from "@nestjs/common";
+    7: 
+    8: /**
+    9:  * Simple header-based guard:
+   10:  * - If ADMIN_API_KEY is not set, allow (dev-friendly)
+   11:  * - If set, require header: x-admin-api-key: <ADMIN_API_KEY>
+   12:  */
+   13: @Injectable()
+   14: export class AdminApiGuard implements CanActivate {
+   15:     canActivate(ctx: ExecutionContext): boolean {
+   16:         const req = ctx.switchToHttp().getRequest();
+   17:         const provided = req.headers["x-admin-api-key"] as string | undefined;
+   18: 
+   19:         // Dev fallback: no key set => allow
+   20:         const expected = process.env.ADMIN_API_KEY?.trim();
+   21:         if (!expected) return true;
+   22: 
+   23:         if (provided && provided === expected) return true;
+   24:         throw new UnauthorizedException("Invalid admin API key");
+   25:     }
+   26: }
+----- END CONTENT -----
+=================== END FILE: src/common/guards/admin-api.guard.ts ===================
+
+================== BEGIN FILE: src/common/types.ts ==================
+Exists: YES
+Path  : C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V6\remoteiq-minimal-e2e\backend\src\common\types.ts
+Size  : 596 bytes
+MTime : 2025-10-15 16:39:42 -04:00
+SHA256: 3D81E73C5E1DD7D9434EED4B655143C0FCD0734ECB712547CEEB817D7B70C78C
+----- START CONTENT (with line numbers) -----
+    1: export type WSIncoming =
+    2:   | { t: "hello"; agentId: string; capabilities: string[]; os: string; arch: string; hostname: string; version: string }
+    3:   | { t: "hb"; at: string; metrics?: { cpu?: number; mem?: number } }
+    4:   | { t: "job_result"; jobId: string; exitCode: number; stdout: string; stderr: string; startedAt: string; finishedAt: string };
+    5: 
+    6: export type WSOutgoing =
+    7:   | { t: "ack"; id: string }
+    8:   | {
+    9:     t: "job_run_script";
+   10:     jobId: string;
+   11:     language: "powershell" | "bash";
+   12:     scriptText: string;
+   13:     args?: string[];
+   14:     env?: Record<string, string>;
+   15:     timeoutSec?: number;
+   16:   };
+----- END CONTENT -----
+=================== END FILE: src/common/types.ts ===================

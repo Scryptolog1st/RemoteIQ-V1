@@ -1,188 +1,250 @@
 // backend/src/ws/dashboard.gateway.ts
-import { Injectable, Logger } from "@nestjs/common";
+import {
+    Injectable,
+    Logger,
+    OnModuleDestroy,
+    OnModuleInit,
+} from "@nestjs/common";
 import { WebSocketGateway, WebSocketServer } from "@nestjs/websockets";
 import type { Server as WsServer, WebSocket, RawData } from "ws";
+import type { IncomingMessage } from "http";
+import { JwtService } from "@nestjs/jwt";
 
-type UiSocket = WebSocket & {
-    userId?: string;                 // TODO: populate from your WS auth later
-    subscriptions?: Set<string>;     // deviceIds this socket wants updates for
-};
+import {
+    UiSocketRegistry,
+    type UiSocket,
+} from "../common/ui-socket-registry.service";
 
-type UiEvent =
-    | { t: "device_checks_updated"; deviceId: string; changed: number; at: string }
-    | { t: "hello"; ok: true };
-
-type ClientMsg =
-    | { t: "subscribe_device"; deviceId: string }
-    | { t: "unsubscribe_device"; deviceId: string }
-    | { t: "hello" };
-
-function rawToString(data: RawData): string {
-    if (typeof data === "string") return data;
-    if (Buffer.isBuffer(data)) return data.toString("utf8");
-    if (Array.isArray(data)) return Buffer.concat(data as Buffer[]).toString("utf8");
-    if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
-    return "";
+/**
+ * Minimal cookie parser (avoids external deps).
+ */
+function parseCookieHeader(h?: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (!h) return out;
+    for (const p of h.split(";")) {
+        const i = p.indexOf("=");
+        if (i > -1) out[p.slice(0, i).trim()] = decodeURIComponent(p.slice(i + 1));
+    }
+    return out;
 }
 
 /**
- * Dashboard (user) WebSocket endpoint.
- * - Path: /ws-dashboard
- * - Protocol:
- *     Client → { t: "hello" } (optional)
- *     Client → { t: "subscribe_device", deviceId }
- *     Client → { t: "unsubscribe_device", deviceId }
- *     Server → { t: "device_checks_updated", deviceId, changed, at }
- *
- * SECURITY: Add a WS auth guard/adaptor later to set socket.userId.
+ * Safely stringify payloads for WS.
  */
-@WebSocketGateway({ path: "/ws-dashboard" })
+function safeJson(data: unknown): string {
+    try {
+        return JSON.stringify(data);
+    } catch {
+        return "{}";
+    }
+}
+
+/**
+ * UI (dashboard) WebSocket gateway.
+ * - Authenticates users by JWT cookie (same cookie as HTTP)
+ * - Registers sockets into UiSocketRegistry
+ * - Supports per-device subscriptions: {t:"subscribe", deviceId}, {t:"unsubscribe", deviceId}
+ * - Heartbeat: {t:"ping"} -> {t:"pong"}
+ *
+ * NOTE: Remember to add DashboardGateway to WsModule.providers.
+ */
+@WebSocketGateway({ path: "/ws-ui" })
 @Injectable()
-export class DashboardGateway {
+export class DashboardGateway implements OnModuleInit, OnModuleDestroy {
     private readonly log = new Logger("DashboardGateway");
 
     @WebSocketServer()
     private ws!: WsServer;
 
-    /** deviceId → sockets subscribed to that device */
-    private subscribers = new Map<string, Set<UiSocket>>();
+    private readonly cookieName =
+        process.env.AUTH_COOKIE_NAME?.trim() || "auth_token";
+    private readonly jwtSecret =
+        process.env.JWT_SECRET?.trim() || "dev-secret"; // dev fallback
 
-    /** per-device debounce to coalesce bursts of inserts */
-    private debounce = new Map<
-        string,
-        { timer: NodeJS.Timeout; changed: number; lastAt: string }
-    >();
+    constructor(
+        private readonly uiSockets: UiSocketRegistry,
+        private readonly jwt: JwtService
+    ) { }
 
-    /** Add a subscription mapping */
-    private addSubscription(sock: UiSocket, deviceId: string) {
-        if (!sock.subscriptions) sock.subscriptions = new Set();
-        sock.subscriptions.add(deviceId);
-
-        let set = this.subscribers.get(deviceId);
-        if (!set) {
-            set = new Set<UiSocket>();
-            this.subscribers.set(deviceId, set);
-        }
-        set.add(sock);
-    }
-
-    /** Remove a subscription mapping */
-    private removeSubscription(sock: UiSocket, deviceId: string) {
-        sock.subscriptions?.delete(deviceId);
-        const set = this.subscribers.get(deviceId);
-        if (set) {
-            set.delete(sock);
-            if (set.size === 0) this.subscribers.delete(deviceId);
-        }
-    }
-
-    /** Clean up all subscriptions on socket close */
-    private cleanupSocket(sock: UiSocket) {
-        if (sock.subscriptions) {
-            for (const deviceId of sock.subscriptions) {
-                const set = this.subscribers.get(deviceId);
-                if (set) {
-                    set.delete(sock);
-                    if (set.size === 0) this.subscribers.delete(deviceId);
-                }
-            }
-            sock.subscriptions.clear();
-        }
-    }
-
-    /** Public API for services: coalesced notify */
-    public notifyDeviceChecksUpdated(deviceId: string, changed: number = 1) {
-        const nowIso = new Date().toISOString();
-
-        // Debounce per device (500ms window)
-        const prev = this.debounce.get(deviceId);
-        if (prev) {
-            prev.changed += Math.max(1, changed);
-            prev.lastAt = nowIso;
-            clearTimeout(prev.timer);
-            prev.timer = setTimeout(() => {
-                this.flushDevice(deviceId);
-            }, 500);
-        } else {
-            const timer = setTimeout(() => this.flushDevice(deviceId), 500);
-            this.debounce.set(deviceId, { timer, changed: Math.max(1, changed), lastAt: nowIso });
-        }
-    }
-
-    /** Actually broadcast the event for a device to subscribed UI sockets */
-    private flushDevice(deviceId: string) {
-        const state = this.debounce.get(deviceId);
-        if (!state) return;
-        this.debounce.delete(deviceId);
-
-        const payload: UiEvent = {
-            t: "device_checks_updated",
-            deviceId,
-            changed: state.changed,
-            at: state.lastAt,
-        };
-
-        const set = this.subscribers.get(deviceId);
-        if (!set || set.size === 0) return;
-
-        let sent = 0;
-        for (const client of set) {
-            if ((client as any).readyState !== (client as any).OPEN) continue;
-            try {
-                client.send(JSON.stringify(payload));
-                sent++;
-            } catch {
-                /* ignore send errors */
-            }
-        }
-        this.log.debug(`Broadcast device_checks_updated device=${deviceId} to ${sent} socket(s)`);
-    }
-
-    /** WS lifecycle + message handling */
-    public afterInit() {
+    onModuleInit() {
         if (!this.ws) {
-            this.log.warn("WS server not initialized by adapter.");
+            this.log.warn(
+                "WS server not initialized by adapter; ensure a WS adapter is configured."
+            );
             return;
         }
 
-        this.ws.on("connection", (socket: UiSocket) => {
-            // TODO: Attach auth-derived userId here if you have a WS auth guard/adapter
-            socket.subscriptions = new Set();
+        this.ws.on(
+            "connection",
+            async (rawSocket: WebSocket, req: IncomingMessage) => {
+                const socket = rawSocket as UiSocket;
 
-            socket.on("message", (data: RawData) => {
-                const text = rawToString(data);
-                if (!text) return;
-                let msg: ClientMsg | undefined;
-                try {
-                    msg = JSON.parse(text);
-                } catch {
+                // ---- Authenticate user from cookie JWT ----
+                const cookies = parseCookieHeader(
+                    (req.headers && (req.headers as any).cookie) || ""
+                );
+                const token = cookies[this.cookieName];
+                if (!token) {
+                    this.closeWithPolicy(socket, 4401, "Missing auth cookie");
                     return;
                 }
-                if (!msg || typeof (msg as any).t !== "string") return;
 
-                switch (msg.t) {
-                    case "hello": {
-                        const resp: UiEvent = { t: "hello", ok: true };
-                        try { socket.send(JSON.stringify(resp)); } catch { /* ignore */ }
-                        break;
-                    }
-                    case "subscribe_device": {
-                        const did = String((msg as any).deviceId || "").trim();
-                        if (!did) return;
-                        this.addSubscription(socket, did);
-                        break;
-                    }
-                    case "unsubscribe_device": {
-                        const did = String((msg as any).deviceId || "").trim();
-                        if (!did) return;
-                        this.removeSubscription(socket, did);
-                        break;
-                    }
+                let userId = "";
+                try {
+                    const payload: any = await this.jwt.verifyAsync(token, {
+                        secret: this.jwtSecret,
+                    });
+                    // Expect standard fields from your login flow
+                    userId = String(payload?.sub || payload?.id || "");
+                    if (!userId) throw new Error("No sub in JWT");
+                } catch (e: any) {
+                    this.closeWithPolicy(
+                        socket,
+                        4401,
+                        `Invalid auth token: ${e?.message || e}`
+                    );
+                    return;
                 }
-            });
 
-            socket.on("close", () => this.cleanupSocket(socket));
-            socket.on("error", () => this.cleanupSocket(socket));
-        });
+                // ---- Register socket ----
+                try {
+                    // Ensure subscriptions set exists for this socket
+                    socket.subscriptions = socket.subscriptions ?? new Set<string>();
+                    this.uiSockets.add(userId, socket);
+
+                    // Ack the connection
+                    socket.send(
+                        safeJson({
+                            t: "ack",
+                            userId,
+                            subscriptions: Array.from(socket.subscriptions),
+                            totals: {
+                                sockets: this.uiSockets.countAll(),
+                                users: this.uiSockets.countUsers(),
+                            },
+                        })
+                    );
+                } catch (e: any) {
+                    this.log.warn(
+                        `Failed to register UI socket for user ${userId}: ${e?.message || e}`
+                    );
+                    this.closeWithPolicy(socket, 1011, "Registration failed");
+                    return;
+                }
+
+                // ---- Message handling ----
+                socket.on("message", (data: RawData) => {
+                    const text = this.rawToString(data);
+                    if (!text) return;
+
+                    let msg: any;
+                    try {
+                        msg = JSON.parse(text);
+                    } catch {
+                        return;
+                    }
+                    const t: string = String(msg?.t || "");
+
+                    // Ping/Pong
+                    if (t === "ping") {
+                        socket.send(safeJson({ t: "pong", at: new Date().toISOString() }));
+                        return;
+                    }
+
+                    // Subscribe to a deviceId
+                    if (t === "subscribe") {
+                        const deviceId = String(msg?.deviceId || "").trim();
+                        if (!deviceId) return;
+
+                        try {
+                            this.uiSockets.subscribe(socket, deviceId);
+                            socket.send(
+                                safeJson({
+                                    t: "subscribed",
+                                    deviceId,
+                                    subscribers: this.uiSockets.countDeviceSubscribers(deviceId),
+                                })
+                            );
+                        } catch (e: any) {
+                            socket.send(
+                                safeJson({
+                                    t: "error",
+                                    error: "subscribe_failed",
+                                    message: e?.message || String(e),
+                                })
+                            );
+                        }
+                        return;
+                    }
+
+                    // Unsubscribe from a deviceId
+                    if (t === "unsubscribe") {
+                        const deviceId = String(msg?.deviceId || "").trim();
+                        if (!deviceId) return;
+
+                        try {
+                            this.uiSockets.unsubscribe(socket, deviceId);
+                            socket.send(
+                                safeJson({
+                                    t: "unsubscribed",
+                                    deviceId,
+                                    subscribers: this.uiSockets.countDeviceSubscribers(deviceId),
+                                })
+                            );
+                        } catch (e: any) {
+                            socket.send(
+                                safeJson({
+                                    t: "error",
+                                    error: "unsubscribe_failed",
+                                    message: e?.message || String(e),
+                                })
+                            );
+                        }
+                        return;
+                    }
+
+                    // Unknown message type — ignore silently or send error
+                });
+
+                // ---- Cleanup on close/error ----
+                const cleanup = () => {
+                    try {
+                        this.uiSockets.remove(socket);
+                    } catch {
+                        /* ignore */
+                    }
+                };
+                socket.on("close", cleanup);
+                socket.on("error", cleanup);
+            }
+        );
+    }
+
+    onModuleDestroy() {
+        try {
+            this.ws?.close();
+        } catch {
+            /* ignore */
+        }
+    }
+
+    /* ------------------------------- Helpers -------------------------------- */
+
+    private rawToString(data: RawData): string {
+        if (typeof data === "string") return data;
+        if (Buffer.isBuffer(data)) return data.toString("utf8");
+        if (Array.isArray(data))
+            return Buffer.concat(data as Buffer[]).toString("utf8");
+        if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
+        return "";
+    }
+
+    private closeWithPolicy(ws: WebSocket, code: number, reason: string) {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (ws as any).close?.(code, reason);
+        } catch {
+            /* ignore */
+        }
     }
 }
