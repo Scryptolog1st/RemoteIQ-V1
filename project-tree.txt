@@ -1,4 +1,4 @@
-RemoteIQ V5
+RemoteIQ V6
 ├── .github
 │   └── instructions
 │       └── snyk_rules.instructions.md
@@ -11,7 +11,7 @@ RemoteIQ V5
 │   ├── .next
 │   │   ├── cache
 │   │   │   ├── eslint
-│   │   │   │   └── .cache_10k8my9
+│   │   │   │   └── .cache_lravh1
 │   │   │   ├── swc
 │   │   │   │   └── plugins
 │   │   │   │       └── v7_windows_x86_64_0.107.1
@@ -19,11 +19,21 @@ RemoteIQ V5
 │   │   │   │   ├── client-production
 │   │   │   │   │   ├── 0.pack
 │   │   │   │   │   ├── 1.pack
+│   │   │   │   │   ├── 10.pack
+│   │   │   │   │   ├── 11.pack
+│   │   │   │   │   ├── 12.pack
+│   │   │   │   │   ├── 13.pack
+│   │   │   │   │   ├── 14.pack
+│   │   │   │   │   ├── 15.pack
+│   │   │   │   │   ├── 16.pack
 │   │   │   │   │   ├── 2.pack
 │   │   │   │   │   ├── 3.pack
 │   │   │   │   │   ├── 4.pack
 │   │   │   │   │   ├── 5.pack
 │   │   │   │   │   ├── 6.pack
+│   │   │   │   │   ├── 7.pack
+│   │   │   │   │   ├── 8.pack
+│   │   │   │   │   ├── 9.pack
 │   │   │   │   │   ├── index.pack
 │   │   │   │   │   └── index.pack.old
 │   │   │   │   ├── edge-server-production
@@ -31,7 +41,16 @@ RemoteIQ V5
 │   │   │   │   │   └── index.pack
 │   │   │   │   └── server-production
 │   │   │   │       ├── 0.pack
-│   │   │   │       └── index.pack
+│   │   │   │       ├── 1.pack
+│   │   │   │       ├── 2.pack
+│   │   │   │       ├── 3.pack
+│   │   │   │       ├── 4.pack
+│   │   │   │       ├── 5.pack
+│   │   │   │       ├── 6.pack
+│   │   │   │       ├── 7.pack
+│   │   │   │       ├── 8.pack
+│   │   │   │       ├── index.pack
+│   │   │   │       └── index.pack.old
 │   │   │   └── .tsbuildinfo
 │   │   ├── server
 │   │   │   ├── app
@@ -96,16 +115,15 @@ RemoteIQ V5
 │   │   │   │   ├── 1216.js
 │   │   │   │   ├── 140.js
 │   │   │   │   ├── 1593.js
+│   │   │   │   ├── 2126.js
 │   │   │   │   ├── 2299.js
 │   │   │   │   ├── 2372.js
-│   │   │   │   ├── 2663.js
 │   │   │   │   ├── 2689.js
 │   │   │   │   ├── 2735.js
 │   │   │   │   ├── 2994.js
 │   │   │   │   ├── 3006.js
 │   │   │   │   ├── 3261.js
 │   │   │   │   ├── 3564.js
-│   │   │   │   ├── 3608.js
 │   │   │   │   ├── 3643.js
 │   │   │   │   ├── 3938.js
 │   │   │   │   ├── 4334.js
@@ -119,6 +137,7 @@ RemoteIQ V5
 │   │   │   │   ├── 5334.js
 │   │   │   │   ├── 579.js
 │   │   │   │   ├── 5924.js
+│   │   │   │   ├── 5996.js
 │   │   │   │   ├── 6096.js
 │   │   │   │   ├── 6452.js
 │   │   │   │   ├── 6457.js
@@ -127,8 +146,8 @@ RemoteIQ V5
 │   │   │   │   ├── 7599.js
 │   │   │   │   ├── 7644.js
 │   │   │   │   ├── 7670.js
-│   │   │   │   ├── 7713.js
 │   │   │   │   ├── 8057.js
+│   │   │   │   ├── 8193.js
 │   │   │   │   ├── 869.js
 │   │   │   │   ├── 8913.js
 │   │   │   │   ├── 9236.js
@@ -171,23 +190,23 @@ RemoteIQ V5
 │   │   │   │   │   │   └── page-69231940db771df0.js
 │   │   │   │   │   ├── (auth)
 │   │   │   │   │   │   └── login
-│   │   │   │   │   │       └── page-0e11da37193df974.js
+│   │   │   │   │   │       └── page-73b547b76bbc62ce.js
 │   │   │   │   │   ├── (dashboard)
 │   │   │   │   │   │   ├── devices
 │   │   │   │   │   │   │   └── [deviceId]
-│   │   │   │   │   │   │       └── page-356f4b3035e49641.js
-│   │   │   │   │   │   ├── layout-a8ae9d082227d606.js
-│   │   │   │   │   │   └── page-5bc22eef407143cc.js
+│   │   │   │   │   │   │       └── page-00fbe6be7a8cf0d8.js
+│   │   │   │   │   │   ├── layout-ec113870325e515d.js
+│   │   │   │   │   │   └── page-6df2b6bd24d06852.js
 │   │   │   │   │   ├── account
-│   │   │   │   │   │   ├── layout-afbeacdbc99ad585.js
-│   │   │   │   │   │   └── page-76acae005acae629.js
+│   │   │   │   │   │   ├── layout-5bfa50eb8de50e38.js
+│   │   │   │   │   │   └── page-f791e53067b86db3.js
 │   │   │   │   │   ├── administration
-│   │   │   │   │   │   ├── layout-c5ce43110cb1341c.js
-│   │   │   │   │   │   └── page-f1a89e620d2f7358.js
+│   │   │   │   │   │   ├── layout-1fd4994db94bac3b.js
+│   │   │   │   │   │   └── page-c3b46ad2ceacb8b7.js
 │   │   │   │   │   ├── customers
-│   │   │   │   │   │   ├── layout-20da50d33d134f8f.js
-│   │   │   │   │   │   └── page-6f5aa777a6886a52.js
-│   │   │   │   │   └── layout-18c9b22bfb697a15.js
+│   │   │   │   │   │   ├── layout-c7db53930f9b8aa2.js
+│   │   │   │   │   │   └── page-469ce128a70e9db4.js
+│   │   │   │   │   └── layout-eb6cda61344eeb2e.js
 │   │   │   │   ├── pages
 │   │   │   │   │   ├── _app-31cb04d632b05a93.js
 │   │   │   │   │   └── _error-2bac1289b58c1969.js
@@ -196,20 +215,17 @@ RemoteIQ V5
 │   │   │   │   ├── 1246.a77b9597e0f44b15.js
 │   │   │   │   ├── 1677-a06fefc99e6d005c.js
 │   │   │   │   ├── 1929-3629cef115187bc0.js
-│   │   │   │   ├── 2104-f867351b752778d0.js
 │   │   │   │   ├── 210f6791.224816c2a51b15e4.js
 │   │   │   │   ├── 2128.9aa1520085b262e7.js
-│   │   │   │   ├── 2210.7a495e6c9ad3ff28.js
 │   │   │   │   ├── 2228-f56942a9d37b1080.js
+│   │   │   │   ├── 2433.f47b916770d95d5b.js
 │   │   │   │   ├── 255.72e6f0ae032a18d5.js
 │   │   │   │   ├── 2606-bb23fdedf1403ce7.js
 │   │   │   │   ├── 2787-09fd9faaec91d77c.js
-│   │   │   │   ├── 2872-f86d2e71d4fba094.js
 │   │   │   │   ├── 2901-44f3928eaa02dabc.js
 │   │   │   │   ├── 3047.3191446ca4593ab3.js
 │   │   │   │   ├── 3208.15204fd83ad864f7.js
 │   │   │   │   ├── 3286.aa825340013f80f0.js
-│   │   │   │   ├── 343-62594b45a5bbb994.js
 │   │   │   │   ├── 3800.3e7cdf9d0364002a.js
 │   │   │   │   ├── 3950-ccd4c781774d1d51.js
 │   │   │   │   ├── 4355.6a1042556d0651a4.js
@@ -223,55 +239,59 @@ RemoteIQ V5
 │   │   │   │   ├── 521.b227f3ec96545621.js
 │   │   │   │   ├── 5409.3791e6b3ddaa25ea.js
 │   │   │   │   ├── 5436-23aab017252ea104.js
-│   │   │   │   ├── 5442-f013eec0ea8e1649.js
+│   │   │   │   ├── 5442-d67e9574495b6bd4.js
+│   │   │   │   ├── 5787-34b5adef22e1d8d4.js
 │   │   │   │   ├── 5813-2ae7be10f4bd4807.js
 │   │   │   │   ├── 5816.2feb1a61361cfd92.js
 │   │   │   │   ├── 5941.8cf9dd47d446b011.js
-│   │   │   │   ├── 6418-65aca693414a3d6d.js
 │   │   │   │   ├── 656.de37f0113c026960.js
 │   │   │   │   ├── 6609.e76cb6ba49e53a56.js
-│   │   │   │   ├── 6673-2c6aabd19188a187.js
 │   │   │   │   ├── 670.5d58170049b2c5c8.js
 │   │   │   │   ├── 672.2ed884b03e959f1f.js
 │   │   │   │   ├── 6890.b317dc39eec7fc90.js
 │   │   │   │   ├── 6897.c1ded17ebb627ac2.js
 │   │   │   │   ├── 6935-185afed7ddc17b6f.js
 │   │   │   │   ├── 6e47441d-a68d85a1e1508ab7.js
+│   │   │   │   ├── 7061-3c55d734f3d55ef5.js
 │   │   │   │   ├── 7106.5535dfa883d39219.js
 │   │   │   │   ├── 7321.d197a65944d0dbfb.js
+│   │   │   │   ├── 7449-c6dc9d4d3421bc47.js
 │   │   │   │   ├── 7468.84016334c34ef2a8.js
 │   │   │   │   ├── 758.c5783b412a27e44d.js
 │   │   │   │   ├── 7640.98b735603877f4db.js
-│   │   │   │   ├── 7790-764b7e5638449310.js
+│   │   │   │   ├── 7687-cab65243085953dc.js
+│   │   │   │   ├── 7981-90a4697768526b5a.js
 │   │   │   │   ├── 8.201db37b49f6ce16.js
 │   │   │   │   ├── 8720-b9fa031dab97fe96.js
 │   │   │   │   ├── 9052.8114d27580156468.js
 │   │   │   │   ├── 9258.3c9079cfa636be0d.js
 │   │   │   │   ├── 9341.1324bb134c005e57.js
+│   │   │   │   ├── 9373-cde07c6d0cc0d7a3.js
 │   │   │   │   ├── 9374-d5a4a685b14597e0.js
 │   │   │   │   ├── 9400.44ce0677f978c359.js
 │   │   │   │   ├── 944.a25793d5eff4514a.js
 │   │   │   │   ├── 9656.6c602562f4ac5075.js
+│   │   │   │   ├── 9862-d3e935890da87f86.js
 │   │   │   │   ├── 9940.62ed2d16ab901b1d.js
 │   │   │   │   ├── framework-ada01bc056db6321.js
 │   │   │   │   ├── main-291169f9eb2bb43b.js
-│   │   │   │   ├── main-app-e7168b7cfb59ca80.js
+│   │   │   │   ├── main-app-d7f178b1eb3b9784.js
 │   │   │   │   ├── polyfills-78c92fac7aa8fdd8.js
-│   │   │   │   └── webpack-a582888a17488f82.js
+│   │   │   │   └── webpack-e57c35593ac186ad.js
 │   │   │   ├── css
-│   │   │   │   ├── 466b950be90a7629.css
+│   │   │   │   ├── d0886cdfb40aa818.css
 │   │   │   │   └── e9f989f02c269104.css
-│   │   │   ├── media
-│   │   │   │   ├── 19cfc7226ec3afaa-s.woff2
-│   │   │   │   ├── 21350d82a1f187e9-s.woff2
-│   │   │   │   ├── 8e9860b6e62d6359-s.woff2
-│   │   │   │   ├── ba9851c3c22cd980-s.woff2
-│   │   │   │   ├── c5fe6dc8356a8c31-s.woff2
-│   │   │   │   ├── df0a9ae256c0569c-s.woff2
-│   │   │   │   └── e4af272ccee01ff0-s.p.woff2
-│   │   │   └── My1yaWw1Fhrdoahf-rLbZ
-│   │   │       ├── _buildManifest.js
-│   │   │       └── _ssgManifest.js
+│   │   │   ├── m8GBkBeN3tXTnLu_wDOCD
+│   │   │   │   ├── _buildManifest.js
+│   │   │   │   └── _ssgManifest.js
+│   │   │   └── media
+│   │   │       ├── 19cfc7226ec3afaa-s.woff2
+│   │   │       ├── 21350d82a1f187e9-s.woff2
+│   │   │       ├── 8e9860b6e62d6359-s.woff2
+│   │   │       ├── ba9851c3c22cd980-s.woff2
+│   │   │       ├── c5fe6dc8356a8c31-s.woff2
+│   │   │       ├── df0a9ae256c0569c-s.woff2
+│   │   │       └── e4af272ccee01ff0-s.p.woff2
 │   │   ├── types
 │   │   │   ├── app
 │   │   │   │   ├── (auth)
@@ -498,6 +518,9 @@ RemoteIQ V5
 │   │   │   ├── build_msi.ps1
 │   │   │   └── Product.wxs
 │   │   ├── RemoteIQ.Agent
+│   │   │   ├── .github
+│   │   │   │   └── instructions
+│   │   │   │       └── snyk_rules.instructions.md
 │   │   │   ├── bin
 │   │   │   │   └── Debug
 │   │   │   │       └── net8.0-windows10.0.17763.0
@@ -617,6 +640,31 @@ RemoteIQ V5
 │   │   │   └── RemoteIQ.sln
 │   │   ├── project-tree.txt
 │   │   └── Write-ProjectTree.ps1
+│   ├── agents
+│   │   └── windows
+│   │       └── RemoteIQ.Agent
+│   │           ├── Models
+│   │           │   ├── AgentConfig.cs
+│   │           │   ├── EnrollmentModels.cs
+│   │           │   ├── TaskModels.cs
+│   │           │   └── UpdateModels.cs
+│   │           ├── Services
+│   │           │   ├── ConfigService.cs
+│   │           │   ├── CryptoService.cs
+│   │           │   ├── EnrollmentService.cs
+│   │           │   ├── HeartbeatService.cs
+│   │           │   ├── InventoryService.cs
+│   │           │   ├── LoggingExtensions.cs
+│   │           │   ├── PinnedHttpClientFactory.cs
+│   │           │   ├── SystemInfoCollector.cs
+│   │           │   ├── TaskWorker.cs
+│   │           │   └── UpdateService.cs
+│   │           ├── appsettings.json
+│   │           ├── appsettings.Production.json
+│   │           ├── global.json
+│   │           ├── Program.cs
+│   │           ├── README.md
+│   │           └── RemoteIQ.Agent.csproj
 │   ├── backend
 │   │   ├── config
 │   │   │   └── database.json
@@ -668,6 +716,10 @@ RemoteIQ V5
 │   │   │   │   ├── agents.controller.ts
 │   │   │   │   ├── agents.module.ts
 │   │   │   │   └── agents.service.ts
+│   │   │   ├── alerts
+│   │   │   │   ├── alerts.controller.ts
+│   │   │   │   ├── alerts.module.ts
+│   │   │   │   └── alerts.service.ts
 │   │   │   ├── auth
 │   │   │   │   ├── dto
 │   │   │   │   │   ├── login.dto.ts
@@ -691,6 +743,10 @@ RemoteIQ V5
 │   │   │   │   ├── branding.controller.ts
 │   │   │   │   ├── branding.module.ts
 │   │   │   │   └── branding.service.ts
+│   │   │   ├── checks
+│   │   │   │   ├── checks.controller.ts
+│   │   │   │   ├── checks.module.ts
+│   │   │   │   └── checks.service.ts
 │   │   │   ├── common
 │   │   │   │   ├── guards
 │   │   │   │   │   └── admin-api.guard.ts
@@ -702,7 +758,8 @@ RemoteIQ V5
 │   │   │   │   ├── online.util.ts
 │   │   │   │   ├── pagination.ts
 │   │   │   │   ├── socket-registry.service.ts
-│   │   │   │   └── types.ts
+│   │   │   │   ├── types.ts
+│   │   │   │   └── ui-socket-registry.service.ts
 │   │   │   ├── company
 │   │   │   │   ├── company.controller.ts
 │   │   │   │   ├── company.dto.ts
@@ -736,7 +793,8 @@ RemoteIQ V5
 │   │   │   │   ├── jobs.module.ts
 │   │   │   │   ├── jobs.service.ts
 │   │   │   │   ├── runs.controller.ts
-│   │   │   │   └── runs.service.ts
+│   │   │   │   ├── runs.service.ts
+│   │   │   │   └── scheduler.service.ts
 │   │   │   ├── localization
 │   │   │   │   ├── localization.controller.ts
 │   │   │   │   ├── localization.dto.ts
@@ -744,6 +802,8 @@ RemoteIQ V5
 │   │   │   │   └── localization.service.ts
 │   │   │   ├── maintenance
 │   │   │   │   └── session-cleaner.service.ts
+│   │   │   ├── notifications
+│   │   │   │   └── notifications.module.ts
 │   │   │   ├── realtime
 │   │   │   │   └── ws.gateway.ts
 │   │   │   ├── roles
@@ -794,6 +854,7 @@ RemoteIQ V5
 │   │   │   │   └── users.service.ts
 │   │   │   ├── ws
 │   │   │   │   ├── agent.gateway.ts
+│   │   │   │   ├── dashboard.gateway.ts
 │   │   │   │   └── ws.module.ts
 │   │   │   ├── app.module.ts
 │   │   │   ├── main.swagger.example.ts
@@ -817,7 +878,8 @@ RemoteIQ V5
 │   │   ├── remoteiq-2fa.png
 │   │   ├── test-smtp.ps1
 │   │   ├── tsconfig.build.json
-│   │   └── tsconfig.json
+│   │   ├── tsconfig.json
+│   │   └── ws-auth-files-dump.txt
 │   ├── agent-windows.zip
 │   ├── generate-jwt-secret.ps1
 │   ├── global.json
@@ -838,8 +900,13 @@ RemoteIQ V5
 ├── .gitignore
 ├── collect-remoteiq-bundle.ps1
 ├── Directory.Packages.props
+├── dump-ws-auth-files.ps1
+├── export-remoteiq-context.ps1
 ├── global.json
+├── package.json
 ├── package.manifest.json
+├── pnpm-lock.yaml
+├── remoteiq_export.txt
 ├── RemoteIQ_RMM_Package.zip
 ├── RemoteIQ.sln
 ├── riq-support.txt

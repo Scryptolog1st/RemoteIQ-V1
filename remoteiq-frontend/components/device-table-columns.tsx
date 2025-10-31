@@ -1,4 +1,3 @@
-// C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V5\remoteiq-frontend\components\device-table-columns.tsx
 "use client";
 
 import * as React from "react";
@@ -17,6 +16,7 @@ import {
     CircleDot,
     Edit3,
     Eraser,
+    KeyRound, // <-- for UUID copy
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -191,6 +191,8 @@ function RowActions({ device }: { device: Device }) {
         toast.success("Alias cleared");
     };
 
+    const agentUuid = (device as any)?.agentUuid as string | undefined | null;
+
     return (
         <>
             <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
@@ -270,6 +272,19 @@ function RowActions({ device }: { device: Device }) {
                         <CircleDot className="mr-2 h-4 w-4" />
                         Copy device ID
                     </DropdownMenuItem>
+
+                    {/* Only show if we actually have an agent UUID from the backend */}
+                    {agentUuid ? (
+                        <DropdownMenuItem
+                            onSelect={(e) => {
+                                e.preventDefault();
+                                copy(agentUuid, "Agent UUID");
+                            }}
+                        >
+                            <KeyRound className="mr-2 h-4 w-4" />
+                            Copy agent UUID
+                        </DropdownMenuItem>
+                    ) : null}
                 </DropdownMenuContent>
             </DropdownMenu>
 

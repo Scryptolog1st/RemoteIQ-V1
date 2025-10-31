@@ -1,0 +1,11 @@
+{
+	"dependencies": {
+		"@nestjs/jwt": "^11.0.1",
+		"cookie": "^1.0.2",
+		"jsonwebtoken": "^9.0.2",
+		"ws": "^8.18.3"
+	},
+	"devDependencies": {
+		"@types/cookie": "^1.0.0"
+	}
+}

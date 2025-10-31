@@ -1,10 +1,12 @@
-// backend/src/jobs/jobs.service.ts
-import { Injectable, NotFoundException, Logger, Inject, forwardRef } from "@nestjs/common";
+import { Injectable, NotFoundException, Logger, Inject, forwardRef, BadRequestException } from "@nestjs/common";
 import { PgPoolService } from "../storage/pg-pool.service";
 import { DispatcherService } from "./dispatcher.service";
 
 type RunScriptInput = {
-  agentId: string;
+  /** Back-compat numeric id (stringified). Optional if agentUuid is provided. */
+  agentId?: string;
+  /** Preferred identifier */
+  agentUuid?: string;
   language: "powershell" | "bash";
   scriptText: string;
   args?: string[];
@@ -21,12 +23,33 @@ export class JobsService {
     @Inject(forwardRef(() => DispatcherService)) private readonly dispatcher: DispatcherService,
   ) { }
 
+  /** Resolve an agent numeric id from either uuid or id (string) */
+  private async resolveAgentNumericId(input: RunScriptInput): Promise<string> {
+    // Prefer UUID if given
+    if (input.agentUuid && input.agentUuid.trim()) {
+      const { rows } = await this.pg.query<{ id: string }>(
+        `SELECT id::text AS id FROM public.agents WHERE agent_uuid = $1 LIMIT 1`,
+        [input.agentUuid.trim()],
+      );
+      const id = rows[0]?.id;
+      if (!id) throw new NotFoundException("Agent not found for provided agentUuid");
+      return id;
+    }
+    // Fall back to agentId (stringified numeric)
+    if (input.agentId && input.agentId.trim()) {
+      return input.agentId.trim();
+    }
+    throw new BadRequestException("Either agentUuid or agentId is required");
+  }
+
   /** Create a run-script job in SQL and attempt dispatch */
   async createRunScriptJob(input: RunScriptInput) {
+    const agentId = await this.resolveAgentNumericId(input);
+
     // Ensure agent exists
     const { rows: agentRows } = await this.pg.query<{ id: string }>(
-      `SELECT id FROM agents WHERE id = $1 LIMIT 1`,
-      [input.agentId],
+      `SELECT id FROM public.agents WHERE id = $1 LIMIT 1`,
+      [agentId],
     );
     if (!agentRows[0]) throw new NotFoundException("Agent not found");
 
@@ -49,7 +72,7 @@ export class JobsService {
       `INSERT INTO jobs (agent_id, type, payload, status, created_at)
        VALUES ($1, 'RUN_SCRIPT', $2, 'queued', now())
        RETURNING id, agent_id, type, status, created_at`,
-      [input.agentId, payload],
+      [agentId, payload],
     );
 
     const job = rows[0];

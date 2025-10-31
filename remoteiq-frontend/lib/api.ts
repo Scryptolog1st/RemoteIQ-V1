@@ -1,4 +1,3 @@
-// C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V6\remoteiq-frontend\lib\api.ts
 // Centralized typed API client used by the frontend (Next.js / React).
 // It reads NEXT_PUBLIC_API_BASE for the backend base URL.
 
@@ -74,9 +73,9 @@ export type Device = {
   user?: string | string[] | null;
   version?: string | null;      // <-- add
   primaryIp?: string | null;    // <-- add
+  /** Optional UUID for the underlying agent (if backend provides it). */
+  agentUuid?: string | null;    // <-- NEW (harmless if absent)
 };
-
-
 
 export type DevicesResponse = {
   items: Device[];

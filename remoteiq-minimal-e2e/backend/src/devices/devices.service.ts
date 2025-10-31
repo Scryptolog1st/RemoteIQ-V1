@@ -14,6 +14,7 @@ export type Device = {
   user?: string | null;
   version?: string | null;
   primaryIp?: string | null;
+  agentUuid?: string | null; // <-- NEW
 };
 
 function decodeCursor(cur?: string | null) {
@@ -80,7 +81,8 @@ export class DevicesService {
           a.site                                       AS site,
           NULLIF(a.logged_in_user, '')                 AS "user",
           NULLIF(a.version, '')                        AS version,
-          NULLIF(a.primary_ip, '')                     AS primary_ip
+          NULLIF(a.primary_ip, '')                     AS primary_ip,
+          a.agent_uuid::text                           AS agent_uuid   -- <-- NEW
         FROM public.agents a
       ),
       device_rows AS (
@@ -95,7 +97,8 @@ export class DevicesService {
           d.site                AS site,
           NULLIF(d."user", '')  AS "user",
           NULL::text            AS version,
-          NULL::text            AS primary_ip
+          NULL::text            AS primary_ip,
+          NULL::text            AS agent_uuid                          -- <-- NEW
         FROM devices d
         WHERE NOT EXISTS (
           SELECT 1 FROM public.agents a
@@ -107,7 +110,7 @@ export class DevicesService {
         UNION ALL
         SELECT * FROM device_rows
       )
-      SELECT id, hostname, os, arch, last_seen, status, client, site, "user", version, primary_ip
+      SELECT id, hostname, os, arch, last_seen, status, client, site, "user", version, primary_ip, agent_uuid
       FROM all_devs
       ${whereSql}
       ORDER BY hostname ASC
@@ -129,6 +132,7 @@ export class DevicesService {
       user: r.user ?? null,
       version: r.version ?? null,
       primaryIp: r.primary_ip ?? null,
+      agentUuid: r.agent_uuid ?? null, // <-- NEW
     })) as Device[];
 
     return { items, nextCursor: hasNext ? encodeCursor(offset + pageSize) : null };
@@ -153,7 +157,8 @@ export class DevicesService {
           a.site                                          AS site,
           NULLIF(a.logged_in_user, '')                    AS "user",
           NULLIF(a.version, '')                           AS version,
-          NULLIF(a.primary_ip, '')                        AS primary_ip
+          NULLIF(a.primary_ip, '')                        AS primary_ip,
+          a.agent_uuid::text                              AS agent_uuid  -- <-- NEW
         FROM public.agents a
         WHERE a.id::text = $1
 
@@ -171,11 +176,12 @@ export class DevicesService {
           d.site                   AS site,
           NULLIF(d."user", '')     AS "user",
           NULL::text               AS version,
-          NULL::text               AS primary_ip
+          NULL::text               AS primary_ip,
+          NULL::text               AS agent_uuid                         -- <-- NEW
         FROM devices d
         WHERE d.id::text = $1
       )
-      SELECT id, hostname, os, arch, last_seen, status, client, site, "user", version, primary_ip
+      SELECT id, hostname, os, arch, last_seen, status, client, site, "user", version, primary_ip, agent_uuid
       FROM rows
       ORDER BY pref ASC
       LIMIT 1;
@@ -196,6 +202,7 @@ export class DevicesService {
       user: r.user ?? null,
       version: r.version ?? null,
       primaryIp: r.primary_ip ?? null,
+      agentUuid: r.agent_uuid ?? null, // <-- NEW
     };
   }
 

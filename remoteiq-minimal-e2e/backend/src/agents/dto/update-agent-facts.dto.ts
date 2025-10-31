@@ -1,4 +1,4 @@
-// src/agents/dto/update-agent-facts.dto.ts
+// backend/src/agents/dto/update-agent-facts.dto.ts
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateAgentFactsDto {
@@ -20,8 +20,15 @@ export class UpdateAgentFactsDto {
     @MaxLength(100)
     primaryIp?: string;
 
+    // agent sends this today
     @IsOptional()
     @IsString()
     @MaxLength(200)
     user?: string;
+
+    // optional alias: some agents might send this name
+    @IsOptional()
+    @IsString()
+    @MaxLength(200)
+    loggedInUser?: string;
 }

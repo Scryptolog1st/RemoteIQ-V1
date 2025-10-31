@@ -1,4 +1,3 @@
-// backend/src/jobs/jobs.controller.ts
 import {
   Body,
   Controller,
@@ -32,9 +31,18 @@ export class JobsController {
     this.checkAdmin(key);
     try {
       const { rows } = await this.pg.query(
-        `SELECT id, device_id, hostname, os, arch, version, created_at, updated_at
-           FROM agents
-          ORDER BY created_at DESC`,
+        `SELECT 
+            id, 
+            agent_uuid::text AS agent_uuid, 
+            device_id, 
+            hostname, 
+            os, 
+            arch, 
+            version, 
+            created_at, 
+            updated_at
+         FROM public.agents
+         ORDER BY created_at DESC`,
       );
       return { items: rows };
     } catch (e: any) {
@@ -48,7 +56,8 @@ export class JobsController {
     @Headers("x-admin-api-key") key: string | undefined,
     @Body()
     body: {
-      agentId: string;
+      agentId?: string;             // numeric id as string (back-compat)
+      agentUuid?: string;           // new: prefer uuid
       language: "powershell" | "bash";
       scriptText: string;
       args?: string[];

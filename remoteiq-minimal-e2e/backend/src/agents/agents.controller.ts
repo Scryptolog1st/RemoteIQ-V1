@@ -1,17 +1,7 @@
-//C:\Users\Last Stop\Documents\Programming Projects\RemoteIQ V6\remoteiq-minimal-e2e\backend\src\agents\agents.controller.ts
-
+// src/agents/agents.controller.ts
 import {
-  Body,
-  Controller,
-  Get,
-  Post,
-  Query,
-  Req,
-  UseGuards,
-  UsePipes,
-  ValidationPipe,
-  BadRequestException,
-  ForbiddenException,
+  Body, Controller, Get, Post, Query, Req,
+  UseGuards, UsePipes, ValidationPipe, BadRequestException, ForbiddenException,
 } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service';
 import { EnrollAgentDto } from './dto/enroll-agent.dto';
@@ -21,7 +11,7 @@ import { UpdateAgentFactsDto } from './dto/update-agent-facts.dto';
 import { SubmitSoftwareDto } from './dto/submit-software.dto';
 import { ChecksService } from '../checks/checks.service';
 import {
-  IsArray, IsDateString, IsObject, IsOptional, IsString, IsUUID,
+  IsArray, IsDateString, IsObject, IsOptional, IsString,
   MaxLength, ValidateNested, ArrayMinSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -44,8 +34,9 @@ export enum AgentRunStatus {
 
 export class SubmitCheckRunItemDto {
   @IsOptional()
-  @IsUUID()
-  assignmentId?: string;
+  @IsString()
+  @MaxLength(36)
+  assignmentId?: string; // uuid string (not strictly validated to allow empty envs)
 
   @IsOptional()
   @IsString()
@@ -90,7 +81,7 @@ export class SubmitCheckRunItemDto {
 
 export class SubmitCheckRunsDto {
   @IsOptional()
-  @IsUUID()
+  @IsString() // <— accepts "win-..." style ids
   deviceId?: string;
 
   @IsArray()
@@ -128,7 +119,7 @@ export class AgentsController {
   @Post('/enroll')
   async enroll(
     @Body() body: EnrollAgentDto
-  ): Promise<{ agentId: string; deviceId: string; agentToken: string }> {
+  ): Promise<{ agentId: string; agentUuid: string | null; deviceId: string; agentToken: string }> {
     const res: any = await this.auth.enrollAgent(body);
 
     const agentId = String(res?.agentId ?? res?.agent?.id ?? '');
@@ -138,10 +129,17 @@ export class AgentsController {
     if (!agentToken || !agentId) {
       throw new Error('Enrollment succeeded but missing token or agentId in response.');
     }
-    return { agentId, deviceId, agentToken };
+
+    let agentUuid: string | null = null;
+    try {
+      agentUuid = await this.agents.getAgentUuidById(Number(agentId));
+    } catch {
+      agentUuid = null;
+    }
+
+    return { agentId, agentUuid, deviceId, agentToken };
   }
 
-  /** Authenticated ping: updates last_seen_at + facts */
   @Post('/ping')
   @UseGuards(AgentTokenGuard)
   async ping(@Req() req: any, @Body() body: UpdateAgentFactsDto) {
@@ -150,7 +148,6 @@ export class AgentsController {
     return { ok: true };
   }
 
-  /** Authenticated: submit full software inventory */
   @Post('/software')
   @UseGuards(AgentTokenGuard)
   async submitSoftware(@Req() req: any, @Body() body: SubmitSoftwareDto) {
@@ -159,17 +156,14 @@ export class AgentsController {
     return { ok: true, count: body?.items?.length ?? 0 };
   }
 
-  /* ===================== NEW: Check runs ingestion ====================== */
-
+  // ===================== Check runs ingestion ======================
   @Post('/check-runs')
   @UseGuards(AgentTokenGuard)
   async submitCheckRuns(@Req() req: any, @Body() body: SubmitCheckRunsDto) {
     const agent = getAgentFromRequest(req);
 
-    // agent.id may be number → cast to string for rate limiter key
     checkRate(String((agent as any).id));
 
-    // Try to get a device binding off the auth context (support both deviceId and device_id)
     const tokenDeviceRaw = (agent as any)?.deviceId ?? (agent as any)?.device_id;
     const deviceIdFromToken: string | undefined =
       tokenDeviceRaw != null ? String(tokenDeviceRaw) : undefined;
@@ -191,7 +185,7 @@ export class AgentsController {
 
     const result = await this.checks.ingestAgentRuns({
       agentId: String((agent as any).id),
-      deviceId,
+      deviceId, // TEXT id
       runs: body.runs.map(r => ({
         assignmentId: r.assignmentId,
         dedupeKey: r.dedupeKey,
@@ -209,14 +203,10 @@ export class AgentsController {
     return { ok: true, inserted: result.inserted, assignmentsCreated: result.assignmentsCreated };
   }
 
-  /* ============== NEW (optional): Pull assignments for device =========== */
-
   @Get('/assignments')
   @UseGuards(AgentTokenGuard)
   async getAssignments(@Req() req: any, @Query('deviceId') deviceId?: string) {
     const agent = getAgentFromRequest(req);
-
-    // Allow query param or device binding from token (deviceId or device_id)
     const tokenDeviceRaw = (agent as any)?.deviceId ?? (agent as any)?.device_id;
     const boundDevice: string | undefined =
       tokenDeviceRaw != null ? String(tokenDeviceRaw) : undefined;

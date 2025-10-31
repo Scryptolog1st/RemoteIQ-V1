@@ -4,10 +4,15 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { Power, Play, ShieldCheck, Tag, Move } from "lucide-react";
+import { Power, Play, ShieldCheck, Tag, Move, Copy } from "lucide-react";
 
 import {
-    Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator,
+    Breadcrumb,
+    BreadcrumbItem,
+    BreadcrumbLink,
+    BreadcrumbList,
+    BreadcrumbPage,
+    BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,11 +41,16 @@ const dtFmt = new Intl.DateTimeFormat("en-US", {
 type BadgeStatus = "healthy" | "warning" | "critical" | "offline";
 function normalizeStatus(s?: string): BadgeStatus {
     switch ((s || "").toLowerCase()) {
-        case "healthy": return "healthy";
-        case "warning": return "warning";
-        case "critical": return "critical";
-        case "online": return "healthy";
-        default: return "offline";
+        case "healthy":
+            return "healthy";
+        case "warning":
+            return "warning";
+        case "critical":
+            return "critical";
+        case "online":
+            return "healthy";
+        default:
+            return "offline";
     }
 }
 
@@ -70,7 +80,7 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
             site: (localDevice as any)?.site ?? "—",
             os: apiDevice?.os ?? (localDevice as any)?.os ?? "Unknown",
             status,
-            // we’ll carry lastSeen through as lastResponse for display
+            // carry lastSeen through as lastResponse for display
             lastResponse: apiDevice?.lastSeen ?? (localDevice as any)?.lastResponse ?? null,
             // extra fields from backend we’ll show directly below
             ...(apiDevice
@@ -79,8 +89,11 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                     primaryIp: apiDevice.primaryIp,
                     version: apiDevice.version,
                     user: apiDevice.user,
+                    agentUuid: (apiDevice as any)?.agentUuid ?? (localDevice as any)?.agentUuid ?? null,
                 }
-                : {}),
+                : {
+                    agentUuid: (localDevice as any)?.agentUuid ?? null,
+                }),
         };
 
         return merged as unknown as UiDevice;
@@ -103,6 +116,17 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
         // TODO: wire your patch call if available
     }, []);
 
+    // ✅ HOOK DECLARED BEFORE ANY CONDITIONAL RETURNS
+    const copy = React.useCallback(async (text: string) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            // optional: toast here
+        } catch {
+            // ignore
+        }
+    }, []);
+
+    // ----- Conditional returns (no hooks below this line) -----
     if (loading && !device) {
         return (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-center p-6">
@@ -116,8 +140,12 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                 <h2 className="text-2xl font-semibold">Error loading device</h2>
                 <p className="text-muted-foreground">{String(error)}</p>
                 <div className="flex gap-2">
-                    <Button variant="outline" onClick={refresh}>Retry</Button>
-                    <Button asChild><Link href="/">Return to Dashboard</Link></Button>
+                    <Button variant="outline" onClick={refresh}>
+                        Retry
+                    </Button>
+                    <Button asChild>
+                        <Link href="/">Return to Dashboard</Link>
+                    </Button>
                 </div>
             </div>
         );
@@ -126,8 +154,12 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
         return (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-center p-6">
                 <h2 className="text-2xl font-semibold">Device Not Found</h2>
-                <p className="text-muted-foreground">The device with ID &apos;{params.deviceId}&apos; could not be found.</p>
-                <Button asChild><Link href="/">Return to Dashboard</Link></Button>
+                <p className="text-muted-foreground">
+                    The device with ID &apos;{params.deviceId}&apos; could not be found.
+                </p>
+                <Button asChild>
+                    <Link href="/">Return to Dashboard</Link>
+                </Button>
             </div>
         );
     }
@@ -135,15 +167,14 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
     const badgeStatus: BadgeStatus = normalizeStatus(device.status as unknown as string);
 
     const lastSeenIso = (device as any).lastResponse as string | null;
-    const lastSeenStr = lastSeenIso
-        ? dtFmt.format(new Date(lastSeenIso)).replace(",", " -")
-        : "—";
+    const lastSeenStr = lastSeenIso ? dtFmt.format(new Date(lastSeenIso)).replace(",", " -") : "—";
 
     const os = (device as any).os ?? "Unknown";
     const arch = (device as any).arch ?? "—";
     const primaryIp = (device as any).primaryIp ?? "—";
     const version = (device as any).version ?? "—";
     const currentUser = (device as any).user ?? "—";
+    const agentUuid = (device as any)?.agentUuid as string | undefined | null;
 
     return (
         <main className="grid flex-1 items-start gap-4 p-4 sm:px-6 sm:py-0 md:gap-8">
@@ -152,21 +183,31 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                     <Breadcrumb className="hidden md:flex">
                         <BreadcrumbList>
                             <BreadcrumbItem>
-                                <BreadcrumbLink asChild><Link href="/">Dashboard</Link></BreadcrumbLink>
+                                <BreadcrumbLink asChild>
+                                    <Link href="/">Dashboard</Link>
+                                </BreadcrumbLink>
                             </BreadcrumbItem>
                             <BreadcrumbSeparator />
                             <BreadcrumbItem>
-                                <BreadcrumbLink asChild><Link href="/customers">Devices</Link></BreadcrumbLink>
+                                <BreadcrumbLink asChild>
+                                    <Link href="/customers">Devices</Link>
+                                </BreadcrumbLink>
                             </BreadcrumbItem>
                             <BreadcrumbSeparator />
                             <BreadcrumbItem>
-                                <BreadcrumbPage>{device.alias || device.hostname}</BreadcrumbPage>
+                                <BreadcrumbPage>{(device as any).alias || (device as any).hostname}</BreadcrumbPage>
                             </BreadcrumbItem>
                         </BreadcrumbList>
                     </Breadcrumb>
 
                     <div className="flex items-center gap-2">
-                        <Button variant="default" size="sm" onClick={openRunScript} className="gap-2" title="Open Run Script">
+                        <Button
+                            variant="default"
+                            size="sm"
+                            onClick={openRunScript}
+                            className="gap-2"
+                            title="Open Run Script"
+                        >
                             <Play className="h-4 w-4" /> Run Script
                         </Button>
                         <Button variant="outline" size="sm" title="Trigger a patch cycle" onClick={onPatchNow}>
@@ -188,7 +229,9 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                             <TabsTrigger value="software">Software</TabsTrigger>
                         </TabsList>
                         <div className="ml-auto flex items-center gap-2">
-                            <Button variant="outline" size="sm" onClick={refresh} title="Refresh device data">Refresh</Button>
+                            <Button variant="outline" size="sm" onClick={refresh} title="Refresh device data">
+                                Refresh
+                            </Button>
                         </div>
                     </div>
 
@@ -197,7 +240,9 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                             <CardHeader>
                                 <div className="flex justify-between items-start gap-4">
                                     <div className="min-w-0">
-                                        <CardTitle className="truncate">{device.alias || device.hostname}</CardTitle>
+                                        <CardTitle className="truncate">
+                                            {(device as any).alias || (device as any).hostname}
+                                        </CardTitle>
                                         <CardDescription className="truncate">
                                             {(device as any).client} / {(device as any).site}
                                         </CardDescription>
@@ -239,6 +284,27 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                                         <h3 className="font-medium text-muted-foreground">Last Response</h3>
                                         <p>{lastSeenStr}</p>
                                     </div>
+
+                                    {/* Agent UUID (optional) */}
+                                    {agentUuid ? (
+                                        <div className="space-y-1 md:col-span-3">
+                                            <h3 className="font-medium text-muted-foreground">Agent UUID</h3>
+                                            <div className="flex items-center gap-2">
+                                                <code className="text-xs break-all">{agentUuid}</code>
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    title="Copy agent UUID"
+                                                    onClick={() => copy(agentUuid)}
+                                                    className="gap-2"
+                                                >
+                                                    <Copy className="h-3.5 w-3.5" />
+                                                    Copy
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    ) : null}
+
                                     <div className="space-y-1 md:col-span-3">
                                         <h3 className="font-medium text-muted-foreground">Logged-in User</h3>
                                         <p>{currentUser}</p>
@@ -248,10 +314,18 @@ export default function DeviceDetailPage({ params }: { params: { deviceId: strin
                         </Card>
                     </TabsContent>
 
-                    <TabsContent value="remote"><RemoteTab /></TabsContent>
-                    <TabsContent value="checks"><ChecksAndAlertsTab /></TabsContent>
-                    <TabsContent value="patch"><PatchTab /></TabsContent>
-                    <TabsContent value="software"><SoftwareTab /></TabsContent>
+                    <TabsContent value="remote">
+                        <RemoteTab />
+                    </TabsContent>
+                    <TabsContent value="checks">
+                        <ChecksAndAlertsTab />
+                    </TabsContent>
+                    <TabsContent value="patch">
+                        <PatchTab />
+                    </TabsContent>
+                    <TabsContent value="software">
+                        <SoftwareTab />
+                    </TabsContent>
                 </Tabs>
             </div>
         </main>

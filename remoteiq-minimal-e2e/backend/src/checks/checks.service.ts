@@ -1,7 +1,9 @@
+// backend/src/checks/checks.service.ts
 import { Injectable, Logger, NotImplementedException } from '@nestjs/common';
 import { PgPoolService } from '../storage/pg-pool.service';
-import { UiSocketRegistry } from '../common/ui-socket-registry.service'; // <-- NEW
+import { UiSocketRegistry } from '../common/ui-socket-registry.service';
 
+/* ========================= Types / helpers ========================= */
 
 export enum CheckScope {
     DEVICE = 'DEVICE',
@@ -57,6 +59,8 @@ function toUiStatus(s?: string | null): DeviceCheckDTO['status'] {
     }
 }
 
+/* =============================== Service =============================== */
+
 @Injectable()
 export class ChecksService {
     private readonly logger = new Logger(ChecksService.name);
@@ -66,15 +70,65 @@ export class ChecksService {
 
     constructor(
         private readonly pg: PgPoolService,
-        private readonly uiSockets: UiSocketRegistry, // <-- NEW
+        private readonly uiSockets: UiSocketRegistry,
     ) { }
 
-    /* ====================== Public read for UI (existing) ====================== */
+    /* ================= Schema guard (idempotent) ================= */
+
+    /** Ensure minimal schema for checks exists (TEXT device_id). Safe to call often. */
+    private async ensureSchema() {
+        await this.pg.query(`
+      CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+      CREATE TABLE IF NOT EXISTS public.check_assignments (
+        id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        device_id   text NOT NULL,
+        dedupe_key  text,
+        check_type  text,
+        check_name  text,
+        created_at  timestamptz DEFAULT now(),
+        updated_at  timestamptz DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS public.check_runs (
+        id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        assignment_id uuid,
+        device_id     text NOT NULL,
+        status        text NOT NULL,
+        severity      text,
+        metrics       jsonb,
+        output        text,
+        started_at    timestamptz,
+        finished_at   timestamptz,
+        created_at    timestamptz DEFAULT now()
+      );
+
+      -- Unique dedupe per device: explicit key OR type|name fallback
+      CREATE UNIQUE INDEX IF NOT EXISTS check_assignments_uk
+        ON public.check_assignments (
+          device_id,
+          COALESCE(
+            NULLIF(dedupe_key, ''),
+            LOWER(COALESCE(check_type,'')) || '|' || LOWER(COALESCE(check_name,''))
+          )
+        );
+
+      CREATE INDEX IF NOT EXISTS check_assignments_device_id_idx ON public.check_assignments (device_id);
+      CREATE INDEX IF NOT EXISTS check_runs_assignment_id_idx    ON public.check_runs (assignment_id);
+      CREATE INDEX IF NOT EXISTS check_runs_device_id_idx        ON public.check_runs (device_id);
+      CREATE INDEX IF NOT EXISTS check_runs_created_at_idx       ON public.check_runs (created_at);
+    `);
+    }
+
+    /* ====================== Public read for UI ====================== */
 
     async listByDevice(deviceId: string, limit = 100): Promise<{ items: DeviceCheckDTO[] }> {
         if (!Number.isFinite(limit) || limit < 1) limit = 1;
         if (limit > 200) limit = 200;
 
+        await this.ensureSchema();
+
+        // Latest run per assignment + assignment name (no dependency on separate "checks" table)
         const sql = `
       WITH latest_run AS (
         SELECT
@@ -83,20 +137,19 @@ export class ChecksService {
           cr.output,
           cr.finished_at AS last_run,
           ROW_NUMBER() OVER (PARTITION BY cr.assignment_id ORDER BY cr.finished_at DESC NULLS LAST) AS rn
-        FROM check_runs cr
+        FROM public.check_runs cr
+        WHERE cr.device_id = $1
       )
       SELECT
-        a.id AS assignment_id,
-        c.name AS check_name,
-        lr.status AS run_status,
-        lr.output AS run_output,
-        lr.last_run
-      FROM check_assignments a
-      JOIN checks c ON c.id = a.check_id
+        a.id                      AS assignment_id,
+        COALESCE(NULLIF(a.check_name,''), NULLIF(a.check_type,''), 'Check') AS check_name,
+        lr.status                 AS run_status,
+        lr.output                 AS run_output,
+        lr.last_run               AS last_run
+      FROM public.check_assignments a
       LEFT JOIN latest_run lr ON lr.assignment_id = a.id AND lr.rn = 1
-      WHERE a.enabled = TRUE
-        AND a.device_id = $1
-      ORDER BY lr.last_run DESC NULLS LAST, c.name ASC
+      WHERE a.device_id = $1
+      ORDER BY lr.last_run DESC NULLS LAST, check_name ASC
       LIMIT $2
     `;
 
@@ -133,18 +186,17 @@ export class ChecksService {
         }
     }
 
-    /* ======================= Agent ingestion (new) ============================ */
+    /* ======================= Agent ingestion ====================== */
 
     /**
-     * Ingest runs from an agent.
-     * - Upsert check (by type+name) if needed (scope=DEVICE)
-     * - Upsert assignment (by id or (check_id, device_id) / dedupe_key)
-     * - Insert runs (status normalized; output clamped)
+     * Ingest runs from an agent (TEXT deviceId).
+     * - Upsert assignment per device using dedupeKey or (type|name) tuple
+     * - Insert runs
      * Returns counts for observability.
      */
     async ingestAgentRuns(input: {
         agentId: string;
-        deviceId: string;
+        deviceId: string; // TEXT (e.g., "win-...")
         runs: Array<{
             assignmentId?: string;
             dedupeKey?: string;
@@ -160,139 +212,125 @@ export class ChecksService {
     }): Promise<{ inserted: number; assignmentsCreated: number }> {
         if (!input?.runs?.length) return { inserted: 0, assignmentsCreated: 0 };
 
-        // Clamp large payloads aggressively to protect DB
+        await this.ensureSchema();
+
         const MAX_OUTPUT = 64 * 1024; // 64 KiB
 
-        let inserted = 0;
-        let assignmentsCreated = 0;
+        // ---------- 1) Prepare src rows with a stable ordinal ----------
+        const srcValues: string[] = [];
+        const srcParams: any[] = [];
+        let p = 1;
 
-        for (const r of input.runs) {
-            // Resolve/ensure check_id
-            let checkId: string | null = null;
+        for (let i = 0; i < input.runs.length; i++) {
+            const r = input.runs[i];
+            const dk = r.dedupeKey ?? null;
+            const ct = (r.checkType || '').trim().toUpperCase() || null;
+            const cn = (r.checkName || ct || 'Agent Check').trim().substring(0, 200) || 'Agent Check';
 
-            if (r.assignmentId) {
-                // If assignment exists, get check_id from it
-                const a = await this.pg.query<{ check_id: string }>(
-                    `SELECT check_id FROM check_assignments WHERE id = $1 LIMIT 1`,
-                    [r.assignmentId]
-                );
-                if (a.rows.length) {
-                    checkId = a.rows[0].check_id;
-                }
-            }
+            // (ord, device_id, dedupe_key, check_type, check_name)
+            srcValues.push(`($${p++}::int, $${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text)`);
+            srcParams.push(i + 1, input.deviceId, dk, ct, cn);
+        }
 
-            if (!checkId) {
-                // Find-or-create check by (type,name) to avoid catalog explosion
-                const type = (r.checkType || '').trim().toUpperCase();
-                const name = (r.checkName || type || 'Agent Check').trim().substring(0, 200) || 'Agent Check';
+        // ---------- 2) Insert missing assignments; count inserted via RETURNING ----------
+        const insertSql = `
+      WITH src(ord, device_id, dedupe_key, check_type, check_name) AS (
+        VALUES ${srcValues.join(',')}
+      )
+      INSERT INTO public.check_assignments (device_id, dedupe_key, check_type, check_name)
+      SELECT s.device_id, s.dedupe_key, s.check_type, s.check_name
+      FROM src s
+      ON CONFLICT (device_id,
+        COALESCE(
+          NULLIF(dedupe_key,''),
+          LOWER(COALESCE(check_type,'')) || '|' || LOWER(COALESCE(check_name,''))
+        ))
+      DO NOTHING
+      RETURNING id;
+    `;
+        const insertRes = await this.pg.query<{ id: string }>(insertSql, srcParams);
+        const assignmentsCreated = (insertRes.rows || []).length;
 
-                if (!type) {
-                    // If no type given and we also didn't have assignmentId, we can't safely proceed.
-                    this.logger.warn(`ingestAgentRuns: missing checkType for run; skipping.`);
-                    continue;
-                }
+        // ---------- 3) Resolve assignment ids for each src row in order ----------
+        const mapSql = `
+      WITH src(ord, device_id, dedupe_key, check_type, check_name) AS (
+        VALUES ${srcValues.join(',')}
+      )
+      SELECT
+        s.ord,
+        ca.id::text AS assignment_id
+      FROM src s
+      JOIN public.check_assignments ca
+        ON ca.device_id = s.device_id
+       AND COALESCE(NULLIF(ca.dedupe_key,''),
+            LOWER(COALESCE(ca.check_type,'')) || '|' || LOWER(COALESCE(ca.check_name,'')))
+        = COALESCE(NULLIF(s.dedupe_key,''),
+            LOWER(COALESCE(s.check_type,'')) || '|' || LOWER(COALESCE(s.check_name,'')))
+      ORDER BY s.ord ASC;
+    `;
+        const mapRes = await this.pg.query<{ ord: number; assignment_id: string }>(mapSql, srcParams);
+        const assignmentByOrd = new Map<number, string>();
+        for (const r of mapRes.rows) assignmentByOrd.set(r.ord, r.assignment_id);
 
-                // Try fetch existing
-                const existing = await this.pg.query<{ id: string }>(
-                    `SELECT id FROM checks WHERE type = $1 AND name = $2 LIMIT 1`,
-                    [type, name]
-                );
-                if (existing.rows.length) {
-                    checkId = existing.rows[0].id;
-                } else {
-                    // Create a minimal DEVICE-scoped check
-                    const ins = await this.pg.query<{ id: string }>(
-                        `INSERT INTO checks (scope, type, name, severity_default, interval_sec, timeout_sec, enabled)
-             VALUES ('DEVICE', $1, $2, 'WARN', 60, 10, TRUE)
-             RETURNING id`,
-                        [type, name]
-                    );
-                    checkId = ins.rows[0].id;
-                }
-            }
+        // ---------- 4) Build runs aligned to the original order ----------
+        const runValues: string[] = [];
+        const runParams: any[] = [];
+        p = 1;
 
-            if (!checkId) continue;
+        for (let i = 0; i < input.runs.length; i++) {
+            const r = input.runs[i];
+            const assignmentIdFromMap = assignmentByOrd.get(i + 1);
 
-            // Resolve/ensure assignment_id for this device
-            let assignmentId = r.assignmentId?.trim() || null;
+            const assignmentId =
+                (r.assignmentId && /^[0-9a-fA-F-]{8}-[0-9a-fA-F-]{4}-[1-5][0-9a-fA-F-]{3}-[89abAB][0-9a-fA-F-]{3}-[0-9a-fA-F-]{12}$/.test(r.assignmentId))
+                    ? r.assignmentId
+                    : assignmentIdFromMap;
 
-            if (assignmentId) {
-                // Validate device ownership
-                const chk = await this.pg.query<{ id: string }>(
-                    `SELECT id FROM check_assignments WHERE id = $1 AND device_id = $2 LIMIT 1`,
-                    [assignmentId, input.deviceId]
-                );
-                if (chk.rows.length === 0) {
-                    // provided assignmentId doesn't belong to this device → ignore and fall back to lookup
-                    assignmentId = null;
-                }
-            }
+            if (!assignmentId) continue; // should not happen, but be defensive
 
-            if (!assignmentId) {
-                // Lookup by (check_id, device_id) or dedupe_key
-                if (r.dedupeKey) {
-                    const foundByKey = await this.pg.query<{ id: string }>(
-                        `SELECT id FROM check_assignments WHERE device_id = $1 AND dedupe_key = $2 LIMIT 1`,
-                        [input.deviceId, r.dedupeKey]
-                    );
-                    if (foundByKey.rows.length) {
-                        assignmentId = foundByKey.rows[0].id;
-                    }
-                }
-                if (!assignmentId) {
-                    const found = await this.pg.query<{ id: string }>(
-                        `SELECT id FROM check_assignments WHERE device_id = $1 AND check_id = $2 LIMIT 1`,
-                        [input.deviceId, checkId]
-                    );
-                    if (found.rows.length) {
-                        assignmentId = found.rows[0].id;
-                    }
-                }
-                if (!assignmentId) {
-                    // Create new assignment
-                    const ins = await this.pg.query<{ id: string }>(
-                        `INSERT INTO check_assignments (check_id, device_id, enabled, dedupe_key)
-             VALUES ($1, $2, TRUE, $3)
-             ON CONFLICT (check_id, device_id) WHERE device_id IS NOT NULL
-             DO UPDATE SET updated_at = now()
-             RETURNING id`,
-                        [checkId, input.deviceId, r.dedupeKey || null]
-                    );
-                    assignmentId = ins.rows[0].id;
-                    assignmentsCreated++;
-                }
-            }
-
-            // Insert run
             const status = normalizeStatus(r.status);
             const severity = r.severity === 'CRIT' ? 'CRIT' : r.severity === 'WARN' ? 'WARN' : null;
-
             const output = (r.output ?? '').slice(0, MAX_OUTPUT);
-
             const startedAt = r.startedAt ? new Date(r.startedAt) : new Date();
             const finishedAt = r.finishedAt ? new Date(r.finishedAt) : new Date();
 
-            await this.pg.query(
-                `INSERT INTO check_runs (assignment_id, status, severity, metrics, output, started_at, finished_at)
-         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)`,
-                [
-                    assignmentId,
-                    status,
-                    severity,
-                    JSON.stringify(r.metrics ?? {}),
-                    output,
-                    startedAt.toISOString(),
-                    finishedAt.toISOString(),
-                ]
+            runValues.push(`(
+        $${p++}::uuid,        -- assignment_id
+        $${p++}::text,        -- device_id
+        $${p++}::text,        -- status
+        $${p++}::text,        -- severity
+        $${p++}::jsonb,       -- metrics
+        $${p++}::text,        -- output
+        $${p++}::timestamptz, -- started_at
+        $${p++}::timestamptz  -- finished_at
+      )`);
+
+            runParams.push(
+                assignmentId,
+                input.deviceId,
+                status,
+                severity,
+                r.metrics ? JSON.stringify(r.metrics) : null,
+                output,
+                startedAt.toISOString(),
+                finishedAt.toISOString(),
             );
-
-            inserted++;
         }
 
-        // Debounced UI broadcast per device (only if something changed)
-        if (inserted > 0) {
-            this.scheduleDeviceBroadcast(input.deviceId, inserted);
+        let inserted = 0;
+        if (runValues.length) {
+            const insSql = `
+        INSERT INTO public.check_runs
+          (assignment_id, device_id, status, severity, metrics, output, started_at, finished_at)
+        VALUES ${runValues.join(',')}
+        RETURNING id;
+      `;
+            const ins = await this.pg.query<{ id: string }>(insSql, runParams);
+            inserted = (ins.rows || []).length;
         }
+
+        // Debounced UI broadcast per device
+        if (inserted > 0) this.scheduleDeviceBroadcast(input.deviceId, inserted);
 
         this.logger.log(`ingested ${inserted} run(s) for device ${input.deviceId}; new assignments: ${assignmentsCreated}`);
         return { inserted, assignmentsCreated };
@@ -319,7 +357,7 @@ export class ChecksService {
             } finally {
                 this.deviceDebounce.delete(key);
             }
-        }, 750); // 750ms debounce: balances freshness vs. flapping
+        }, 750);
 
         this.deviceDebounce.set(key, handle);
     }
@@ -329,58 +367,47 @@ export class ChecksService {
     async getAssignmentsForDevice(deviceId: string): Promise<{
         items: Array<{
             assignmentId: string;
-            checkId: string;
-            type: string;
-            name: string;
-            intervalSec: number;
-            timeoutSec: number;
+            type: string | null;
+            name: string | null;
+            intervalSec: number; // static defaults for now
+            timeoutSec: number;  // static defaults for now
             enabled: boolean;
             dedupeKey?: string | null;
             config?: any;
             thresholds?: any;
         }>;
     }> {
-        const sql = `
+        await this.ensureSchema();
+
+        // We don’t maintain a separate checks catalog here; return lightweight rows
+        const { rows } = await this.pg.query(
+            `
       SELECT
-        a.id AS assignment_id,
-        c.id AS check_id,
-        c.type,
-        c.name,
-        c.interval_sec,
-        c.timeout_sec,
-        a.enabled,
-        a.dedupe_key,
-        COALESCE(a.config, c.config) AS config,
-        COALESCE(a.thresholds, c.threshold) AS thresholds
-      FROM check_assignments a
-      JOIN checks c ON c.id = a.check_id
+        a.id::text            AS assignment_id,
+        a.check_type          AS check_type,
+        a.check_name          AS check_name,
+        a.dedupe_key          AS dedupe_key,
+        a.created_at,
+        a.updated_at
+      FROM public.check_assignments a
       WHERE a.device_id = $1
-    `;
-        const { rows } = await this.pg.query<{
-            assignment_id: string;
-            check_id: string;
-            type: string;
-            name: string;
-            interval_sec: number;
-            timeout_sec: number;
-            enabled: boolean;
-            dedupe_key: string | null;
-            config: any;
-            thresholds: any;
-        }>(sql, [deviceId]);
+      ORDER BY a.created_at DESC
+      `,
+            [deviceId]
+        );
 
         return {
-            items: rows.map(r => ({
+            items: rows.map((r: any) => ({
                 assignmentId: r.assignment_id,
-                checkId: r.check_id,
-                type: r.type,
-                name: r.name,
-                intervalSec: r.interval_sec,
-                timeoutSec: r.timeout_sec,
-                enabled: r.enabled,
+                type: r.check_type ?? null,
+                name: r.check_name ?? null,
+                // simple defaults (agents can override via config if/when you add it)
+                intervalSec: 60,
+                timeoutSec: 10,
+                enabled: true,
                 dedupeKey: r.dedupe_key,
-                config: r.config,
-                thresholds: r.thresholds,
+                config: null,
+                thresholds: null,
             })),
         };
     }
